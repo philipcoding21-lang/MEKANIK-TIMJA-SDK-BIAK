@@ -1,6 +1,8 @@
 import React, { useState } from "react";
 import { Temuan, Pemeriksaan } from "../types";
-import { Plus, Search, Edit2, Trash2, ShieldAlert, Sparkles, Calendar, X } from "lucide-react";
+import { Plus, Search, Edit2, Trash2, ShieldAlert, Sparkles, Calendar, X, Mail, CheckSquare, Check, RefreshCw, AlertCircle, MessageSquare } from "lucide-react";
+import { googleWorkspaceApi } from "../lib/googleWorkspace";
+import { getAccessToken } from "../lib/firebaseAuth";
 
 interface TemuanListProps {
   temuan: Temuan[];
@@ -23,6 +25,74 @@ export const TemuanList: React.FC<TemuanListProps> = ({
   const [statusFilter, setStatusFilter] = useState<string>("All");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+
+  // Google Workspace States
+  const [submittingTaskId, setSubmittingTaskId] = useState<string | null>(null);
+  const [notifyingFindingId, setNotifyingFindingId] = useState<string | null>(null);
+  const [notifyingEmail, setNotifyingEmail] = useState<string>("");
+  const [workspaceStatus, setWorkspaceStatus] = useState<string | null>(null);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [showGmailId, setShowGmailId] = useState<string | null>(null);
+
+  const handleAddTask = async (t: Temuan, parent: Pemeriksaan | undefined) => {
+    setSubmittingTaskId(t.id);
+    setWorkspaceStatus(null);
+    setWorkspaceError(null);
+    try {
+      const token = await getAccessToken();
+      if (!token) {
+        throw new Error("Sesi Google belum terhubung. Silakan hubungkan di menu Pengaturan database.");
+      }
+      const title = `Tindak Lanjut Temuan: ${parent ? parent.pelaku_usaha : "Pelaku Usaha"}`;
+      const notes = `Uraian Temuan: ${t.uraian_temuan}\nStatus: ${t.status_tindak_lanjut}\nTanggal Update: ${t.tanggal_update}\nRekomendasi: ${parent?.rekomendasi || "-"}`;
+      
+      await googleWorkspaceApi.createGoogleTask(token, title, notes);
+      setWorkspaceStatus(`Berhasil menambahkan tugas tindak lanjut ke Google Tasks Anda!`);
+      setTimeout(() => setWorkspaceStatus(null), 5000);
+    } catch (err: any) {
+      setWorkspaceError(err.message || "Gagal menambahkan tugas ke Google Tasks.");
+      setTimeout(() => setWorkspaceError(null), 6000);
+    } finally {
+      setSubmittingTaskId(null);
+    }
+  };
+
+  const handleSendGmail = async (e: React.FormEvent, t: Temuan, parent: Pemeriksaan | undefined) => {
+    e.preventDefault();
+    if (!notifyingEmail) return;
+    setNotifyingFindingId(t.id);
+    setWorkspaceStatus(null);
+    setWorkspaceError(null);
+    try {
+      const token = await getAccessToken();
+      if (!token) {
+        throw new Error("Sesi Google belum terhubung. Silakan hubungkan di menu Pengaturan database.");
+      }
+      const subject = `[SDKP BIAK] Pemberitahuan Temuan Lapangan - ${parent ? parent.pelaku_usaha : "Pelaku Usaha"}`;
+      const body = `Yth. Tim Satwas / Pengawas Lapangan,\n\n` +
+                   `Berikut adalah rincian temuan lapangan yang perlu ditindaklanjuti:\n\n` +
+                   `• Pelaku Usaha: ${parent ? parent.pelaku_usaha : "Tidak terhubung"}\n` +
+                   `• Kegiatan: ${parent ? parent.jenis_usaha : "-"}\n` +
+                   `• Uraian Temuan: ${t.uraian_temuan}\n` +
+                   `• Status Tindak Lanjut: ${t.status_tindak_lanjut}\n` +
+                   `• Tanggal Update: ${t.tanggal_update}\n` +
+                   `• Rekomendasi: ${parent?.rekomendasi || "-"}\n\n` +
+                   `Mohon lakukan pemeriksaan berkas dan tindak lanjut segera.\n\n` +
+                   `Salam,\n` +
+                   `Tim MEKANIK TIMJA SDK Stasiun SDKP Biak`;
+
+      await googleWorkspaceApi.sendGmailEmail(token, notifyingEmail, subject, body);
+      setWorkspaceStatus(`Pemberitahuan email berhasil dikirim via Gmail ke ${notifyingEmail}!`);
+      setShowGmailId(null);
+      setNotifyingEmail("");
+      setTimeout(() => setWorkspaceStatus(null), 5000);
+    } catch (err: any) {
+      setWorkspaceError(err.message || "Gagal mengirimkan email via Gmail.");
+      setTimeout(() => setWorkspaceError(null), 6000);
+    } finally {
+      setNotifyingFindingId(null);
+    }
+  };
 
   // Lookup helper
   const getPemeriksaanInfo = (pemeriksaanId: string) => {
@@ -135,6 +205,20 @@ export const TemuanList: React.FC<TemuanListProps> = ({
         )}
       </div>
 
+      {workspaceStatus && (
+        <div className="p-3 text-xs bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg flex items-center gap-2 font-bold animate-in fade-in duration-150">
+          <Check className="w-4 h-4 text-emerald-500 shrink-0" />
+          {workspaceStatus}
+        </div>
+      )}
+
+      {workspaceError && (
+        <div className="p-3 text-xs bg-rose-50 border border-rose-200 text-rose-800 rounded-lg flex items-center gap-2 font-bold animate-in fade-in duration-150">
+          <AlertCircle className="w-4 h-4 text-rose-650 shrink-0" />
+          {workspaceError}
+        </div>
+      )}
+
       {/* Grid of Issues Cards */}
       {filteredTemuan.length === 0 ? (
         <div className="bg-white border rounded-2xl p-12 text-center flex flex-col items-center justify-center gap-3">
@@ -181,26 +265,81 @@ export const TemuanList: React.FC<TemuanListProps> = ({
                   <div className="mt-3 p-3.5 bg-slate-50 rounded-xl border border-slate-100">
                     <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block mb-1">Rincian Temuan Lapangan</span>
                     <p className="text-xs text-slate-750 font-semibold leading-relaxed">{t.uraian_temuan}</p>
-                  </div>
-
-                  {/* Recommendation action box */}
+                                {/* Recommendation action box */}
                   {parent?.rekomendasi && (
                     <div className="mt-3 text-xs">
                       <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block mb-1">Rekomendasi UPT SDKP</span>
                       <p className="text-slate-600 font-medium italic">"{parent.rekomendasi}"</p>
                     </div>
                   )}
+
+                  {/* Inline Gmail Sender Form */}
+                  {showGmailId === t.id && (
+                    <form
+                      onSubmit={(e) => handleSendGmail(e, t, parent)}
+                      className="mt-4 p-3 bg-rose-50/50 rounded-xl border border-rose-100 space-y-2 animate-in slide-in-from-top-2 duration-150"
+                    >
+                      <label className="block text-[10px] font-bold text-rose-800 uppercase">Kirim Notifikasi Temuan via Gmail</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="email"
+                          required
+                          value={notifyingEmail}
+                          onChange={(e) => setNotifyingEmail(e.target.value)}
+                          placeholder="Email penerima (e.g. satwas@kkp.go.id)..."
+                          className="flex-1 px-3 py-1.5 border border-slate-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-rose-500 font-semibold bg-white text-slate-750"
+                        />
+                        <button
+                          type="submit"
+                          disabled={notifyingFindingId === t.id}
+                          className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg cursor-pointer disabled:bg-slate-350 shrink-0"
+                        >
+                          {notifyingFindingId === t.id ? "Mengirim..." : "Kirim"}
+                        </button>
+                      </div>
+                    </form>
+                  )}
                 </div>
 
                 {/* Footer Controls */}
-                <div className="flex items-center justify-between border-t pt-3.5 mt-2">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between border-t pt-3.5 mt-2 gap-2">
                   <span className="text-[10px] text-slate-450 font-mono font-medium">Update: {t.tanggal_update}</span>
                   {canManage && (
-                    <div className="flex items-center gap-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        onClick={() => handleAddTask(t, parent)}
+                        disabled={submittingTaskId === t.id}
+                        title="Tambahkan tugas tindak lanjut ke Google Tasks"
+                        className="p-1 px-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-lg cursor-pointer border border-indigo-100 flex items-center gap-1 transition-colors disabled:bg-slate-100"
+                      >
+                        {submittingTaskId === t.id ? (
+                          <RefreshCw className="w-3 h-3 animate-spin text-indigo-650" />
+                        ) : (
+                          <CheckSquare className="w-3.5 h-3.5 text-indigo-600" />
+                        )}
+                        <span>Task</span>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setShowGmailId(showGmailId === t.id ? null : t.id);
+                          setNotifyingEmail("");
+                        }}
+                        title="Kirim Pemberitahuan Gmail"
+                        className={`p-1 px-2.5 text-xs font-bold rounded-lg cursor-pointer flex items-center gap-1 border transition-colors ${
+                          showGmailId === t.id 
+                            ? "bg-rose-600 text-white border-rose-600" 
+                            : "bg-rose-50 text-rose-700 hover:bg-rose-100 border-rose-100"
+                        }`}
+                      >
+                        <Mail className="w-3.5 h-3.5" />
+                        <span>Email</span>
+                      </button>
+
                       <button
                         onClick={() => onEditClick(t)}
                         title="Tindak Lanjut atau Edit"
-                        className="py-1 px-2.5 bg-sky-50 text-sky-700 hover:bg-sky-100 text-xs font-bold rounded-lg cursor-pointer border border-sky-100 flex items-center gap-1"
+                        className="py-1 px-2.5 bg-sky-50 text-sky-750 hover:bg-sky-100 text-xs font-bold rounded-lg cursor-pointer border border-sky-100 flex items-center gap-1"
                       >
                         <Edit2 className="w-3 h-3" />
                         Tindak Lanjut
@@ -209,14 +348,14 @@ export const TemuanList: React.FC<TemuanListProps> = ({
                         <button
                           onClick={() => onDeleteClick(t.id, t.uraian_temuan.slice(0, 20))}
                           title="Hapus Temuan"
-                          className="p-1 px-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg cursor-pointer"
+                          className="p-1 px-1.5 text-slate-400 hover:text-red-650 hover:bg-red-50 rounded-lg cursor-pointer"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       )}
                     </div>
                   )}
-                </div>
+                </div>      </div>
               </div>
             );
           })}

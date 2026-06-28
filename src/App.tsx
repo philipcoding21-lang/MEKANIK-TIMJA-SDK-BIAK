@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { User, Pemeriksaan, Dokumen, Temuan, MasterSatwas, DashboardStats, UserRole } from "./types";
 import { api } from "./lib/api";
 import { motion } from "motion/react";
+import kepolisianKhususLogo from "./assets/images/polsus_badge_real_1782639227590.jpg";
 
 // Sub-component imports
 import { Sidebar } from "./components/Sidebar";
@@ -523,13 +524,10 @@ export default function App() {
               />
               <div className="w-px h-8 sm:h-10 bg-sky-800/40 shrink-0" />
               <img 
-                src="https://upload.wikimedia.org/wikipedia/commons/2/23/Lambang_Kepolisian_Khusus_Indonesia.png" 
-                alt="Logo Polsus" 
-                className="w-11 h-11 sm:w-12 sm:h-12 md:w-14 md:h-14 object-contain shrink-0"
+                src={kepolisianKhususLogo} 
+                alt="Logo Kepolisian Khusus" 
+                className="w-11 h-11 sm:w-12 sm:h-12 md:w-14 md:h-14 object-contain shrink-0 filter drop-shadow-[0_2px_8px_rgba(250,204,21,0.15)] animate-pulse"
                 referrerPolicy="no-referrer"
-                onError={(e) => {
-                  e.currentTarget.style.display = 'none';
-                }}
               />
             </div>
             <h2 className="font-sans font-black text-2xl tracking-tight uppercase bg-gradient-to-r from-blue-400 via-sky-300 to-yellow-300 text-transparent bg-clip-text select-all">

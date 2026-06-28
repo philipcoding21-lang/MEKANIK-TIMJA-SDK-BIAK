@@ -14,6 +14,7 @@ import {
   History
 } from "lucide-react";
 import { User, UserRole } from "../types";
+import kepolisianKhususLogo from "../assets/images/polsus_badge_real_1782639227590.jpg";
 
 interface SidebarProps {
   activeTab: string;
@@ -103,13 +104,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, user,
           />
           <div className="w-px h-4 bg-sky-800/40 shrink-0" />
           <img 
-            src="https://upload.wikimedia.org/wikipedia/commons/2/23/Lambang_Kepolisian_Khusus_Indonesia.png" 
+            src={kepolisianKhususLogo} 
             alt="Logo Polsus" 
             className="w-6 h-6 object-contain shrink-0"
             referrerPolicy="no-referrer"
-            onError={(e) => {
-              e.currentTarget.style.display = 'none';
-            }}
           />
           <span className="font-extrabold tracking-tight text-[11px] bg-gradient-to-r from-blue-300 via-sky-200 to-yellow-200 text-transparent bg-clip-text ml-1 select-none">MEKANIK TIMJA SDK</span>
         </div>
@@ -140,13 +138,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, user,
               />
               <div className="w-px h-5 bg-sky-800/40 shrink-0" />
               <img 
-                src="https://upload.wikimedia.org/wikipedia/commons/2/23/Lambang_Kepolisian_Khusus_Indonesia.png" 
+                src={kepolisianKhususLogo} 
                 alt="Logo Polsus" 
                 className="w-7 h-7 object-contain shrink-0"
                 referrerPolicy="no-referrer"
-                onError={(e) => {
-                  e.currentTarget.style.display = 'none';
-                }}
               />
             </div>
             <div>
