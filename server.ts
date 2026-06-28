@@ -1,0 +1,857 @@
+import express from "express";
+import path from "path";
+import fs from "fs/promises";
+import { createServer as createViteServer } from "vite";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+const app = express();
+const PORT = 3000;
+
+app.use(express.json());
+
+// Path to local JSON DB
+const DB_PATH = path.join(process.cwd(), "data", "db.json");
+
+// Helper to read local database
+async function readDB() {
+  try {
+    const data = await fs.readFile(DB_PATH, "utf-8");
+    const json = JSON.parse(data);
+    if (!json.logs) {
+      json.logs = [];
+    }
+    if (json.config) {
+      if (json.config.DATA_PERSISTENCE_MODE) {
+        configEnv.DATA_PERSISTENCE_MODE = json.config.DATA_PERSISTENCE_MODE;
+      }
+      if (json.config.GAS_WEB_APP_URL !== undefined) {
+        configEnv.GAS_WEB_APP_URL = json.config.GAS_WEB_APP_URL;
+      }
+      if (json.config.SPREADSHEET_ID !== undefined) {
+        configEnv.SPREADSHEET_ID = json.config.SPREADSHEET_ID;
+      }
+      if (json.config.PAGU_ANGGARAN !== undefined) {
+        configEnv.PAGU_ANGGARAN = Number(json.config.PAGU_ANGGARAN) || 0;
+      }
+      if (json.config.REALISASI_ANGGARAN !== undefined) {
+        configEnv.REALISASI_ANGGARAN = Number(json.config.REALISASI_ANGGARAN) || 0;
+      }
+      if (json.config.TARGET_REALISASI !== undefined) {
+        configEnv.TARGET_REALISASI = Number(json.config.TARGET_REALISASI) || 0;
+      }
+      if (json.config.TARGET_Q1 !== undefined) configEnv.TARGET_Q1 = Number(json.config.TARGET_Q1) || 0;
+      if (json.config.TARGET_Q2 !== undefined) configEnv.TARGET_Q2 = Number(json.config.TARGET_Q2) || 0;
+      if (json.config.TARGET_Q3 !== undefined) configEnv.TARGET_Q3 = Number(json.config.TARGET_Q3) || 0;
+      if (json.config.TARGET_Q4 !== undefined) configEnv.TARGET_Q4 = Number(json.config.TARGET_Q4) || 0;
+      if (json.config.REALISASI_Q1 !== undefined) configEnv.REALISASI_Q1 = Number(json.config.REALISASI_Q1) || 0;
+      if (json.config.REALISASI_Q2 !== undefined) configEnv.REALISASI_Q2 = Number(json.config.REALISASI_Q2) || 0;
+      if (json.config.REALISASI_Q3 !== undefined) configEnv.REALISASI_Q3 = Number(json.config.REALISASI_Q3) || 0;
+      if (json.config.REALISASI_Q4 !== undefined) configEnv.REALISASI_Q4 = Number(json.config.REALISASI_Q4) || 0;
+    }
+    return json;
+  } catch (error) {
+    console.error("Error reading local DB, initializing empty:", error);
+    return { 
+      config: { DATA_PERSISTENCE_MODE: "local", GAS_WEB_APP_URL: "", SPREADSHEET_ID: "" },
+      users: [], 
+      pemeriksaan: [], 
+      dokumen: [], 
+      temuan: [], 
+      satwas: [],
+      logs: [] 
+    };
+  }
+}
+
+// Helper to write local database
+async function writeDB(data: any) {
+  try {
+    // Keep config synced inside the output
+    data.config = {
+      DATA_PERSISTENCE_MODE: configEnv.DATA_PERSISTENCE_MODE,
+      GAS_WEB_APP_URL: configEnv.GAS_WEB_APP_URL,
+      SPREADSHEET_ID: configEnv.SPREADSHEET_ID,
+      PAGU_ANGGARAN: Number(configEnv.PAGU_ANGGARAN) || 0,
+      REALISASI_ANGGARAN: Number(configEnv.REALISASI_ANGGARAN) || 0,
+      TARGET_REALISASI: Number(configEnv.TARGET_REALISASI) || 0,
+      TARGET_Q1: Number(configEnv.TARGET_Q1) || 0,
+      TARGET_Q2: Number(configEnv.TARGET_Q2) || 0,
+      TARGET_Q3: Number(configEnv.TARGET_Q3) || 0,
+      TARGET_Q4: Number(configEnv.TARGET_Q4) || 0,
+      REALISASI_Q1: Number(configEnv.REALISASI_Q1) || 0,
+      REALISASI_Q2: Number(configEnv.REALISASI_Q2) || 0,
+      REALISASI_Q3: Number(configEnv.REALISASI_Q3) || 0,
+      REALISASI_Q4: Number(configEnv.REALISASI_Q4) || 0,
+    };
+    await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2), "utf-8");
+  } catch (error) {
+    console.error("Error writing local DB:", error);
+  }
+}
+
+// Memory configuration, allowing user to dynamically set GAS URL from the client
+let configEnv = {
+  DATA_PERSISTENCE_MODE: process.env.DATA_PERSISTENCE_MODE || "local",
+  GAS_WEB_APP_URL: process.env.GAS_WEB_APP_URL || "",
+  SPREADSHEET_ID: process.env.SPREADSHEET_ID || "",
+  PAGU_ANGGARAN: 1250000000,
+  REALISASI_ANGGARAN: 825000000,
+  TARGET_REALISASI: 1000000000,
+  TARGET_Q1: 250000000,
+  TARGET_Q2: 250000000,
+  TARGET_Q3: 250000000,
+  TARGET_Q4: 250000000,
+  REALISASI_Q1: 220000000,
+  REALISASI_Q2: 230000000,
+  REALISASI_Q3: 200000000,
+  REALISASI_Q4: 175000000,
+};
+
+// Generic Apps Script Proxy Handler
+async function proxyToGAS(action: string, method: "GET" | "POST", body: any = null): Promise<any> {
+  const url = configEnv.GAS_WEB_APP_URL;
+  if (!url) {
+    throw new Error("Google Apps Script Web App URL is not configured.");
+  }
+
+  let finalUrl: URL;
+  try {
+    finalUrl = new URL(url);
+  } catch (err) {
+    throw new Error(`URL Google Apps Script tidak valid: ${url}`);
+  }
+  finalUrl.searchParams.set("action", action);
+
+  const options: RequestInit = {
+    method: method,
+    headers: {
+      "Content-Type": "application/json",
+    },
+  };
+
+  if (method === "POST" && body) {
+    // Inject the action so the body has it as a backup
+    if (typeof body === "object" && body !== null && !Array.isArray(body)) {
+      body.action = action;
+    }
+    options.body = JSON.stringify(body);
+  }
+
+  const response = await fetch(finalUrl.toString(), options);
+  if (!response.ok) {
+    throw new Error(`GAS Request Failed: ${response.status} ${response.statusText}`);
+  }
+
+  const contentType = response.headers.get("content-type") || "";
+  const text = await response.text();
+
+  if (text.trim().startsWith("<") || contentType.includes("text/html")) {
+    throw new Error("Respon dari Google Apps Script berupa dokumen HTML. Pastikan Web App dipos sebagai 'Anyone' (Siapa Saja) dan URL Web App (akhiran /exec) sudah benar.");
+  }
+
+  try {
+    const json = JSON.parse(text);
+    if (json && typeof json === "object") {
+      if (json.success === false) {
+        throw new Error(json.message || `Error dari Google Apps Script untuk aksi ${action}`);
+      }
+      return json.hasOwnProperty("data") ? json.data : json;
+    }
+    return json;
+  } catch (err: any) {
+    throw new Error(`Gagal memproses JSON dari Google Apps Script: ${err.message}. Respons mentah: ${text.slice(0, 150)}`);
+  }
+}
+
+// Helper to trigger automated notifications via Google Apps Script Web App
+async function triggerNotification(type: string, data: any) {
+  if (configEnv.GAS_WEB_APP_URL) {
+    try {
+      await proxyToGAS("sendNotification", "POST", { type, data });
+      console.log(`Notification sent successfully via GAS Web App for type: ${type}`);
+    } catch (err: any) {
+      console.warn(`Failed to send notification via GAS Web App: ${err.message}`);
+    }
+  } else {
+    console.log(`GAS Web App URL not configured. Skipping automated notification for type: ${type}`);
+  }
+}
+
+// API CONFIG ENDPOINT
+app.get("/api/config", (req, res) => {
+  res.json({ success: true, data: configEnv });
+});
+
+app.get("/api/appsscript-code", async (req, res) => {
+  try {
+    const codePath = path.join(process.cwd(), "AppsScript_Code.gs");
+    const code = await fs.readFile(codePath, "utf-8");
+    res.json({ success: true, code });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: "Gagal membaca berkas AppsScript_Code.gs: " + err.message });
+  }
+});
+
+app.post("/api/config", async (req, res) => {
+  const { 
+    DATA_PERSISTENCE_MODE, 
+    GAS_WEB_APP_URL, 
+    SPREADSHEET_ID, 
+    PAGU_ANGGARAN, 
+    REALISASI_ANGGARAN, 
+    TARGET_REALISASI,
+    TARGET_Q1,
+    TARGET_Q2,
+    TARGET_Q3,
+    TARGET_Q4,
+    REALISASI_Q1,
+    REALISASI_Q2,
+    REALISASI_Q3,
+    REALISASI_Q4
+  } = req.body;
+  if (DATA_PERSISTENCE_MODE) configEnv.DATA_PERSISTENCE_MODE = DATA_PERSISTENCE_MODE;
+  if (GAS_WEB_APP_URL !== undefined) configEnv.GAS_WEB_APP_URL = GAS_WEB_APP_URL;
+  if (SPREADSHEET_ID !== undefined) configEnv.SPREADSHEET_ID = SPREADSHEET_ID;
+  if (PAGU_ANGGARAN !== undefined) configEnv.PAGU_ANGGARAN = Number(PAGU_ANGGARAN) || 0;
+  if (REALISASI_ANGGARAN !== undefined) configEnv.REALISASI_ANGGARAN = Number(REALISASI_ANGGARAN) || 0;
+  if (TARGET_REALISASI !== undefined) configEnv.TARGET_REALISASI = Number(TARGET_REALISASI) || 0;
+  if (TARGET_Q1 !== undefined) configEnv.TARGET_Q1 = Number(TARGET_Q1) || 0;
+  if (TARGET_Q2 !== undefined) configEnv.TARGET_Q2 = Number(TARGET_Q2) || 0;
+  if (TARGET_Q3 !== undefined) configEnv.TARGET_Q3 = Number(TARGET_Q3) || 0;
+  if (TARGET_Q4 !== undefined) configEnv.TARGET_Q4 = Number(TARGET_Q4) || 0;
+  if (REALISASI_Q1 !== undefined) configEnv.REALISASI_Q1 = Number(REALISASI_Q1) || 0;
+  if (REALISASI_Q2 !== undefined) configEnv.REALISASI_Q2 = Number(REALISASI_Q2) || 0;
+  if (REALISASI_Q3 !== undefined) configEnv.REALISASI_Q3 = Number(REALISASI_Q3) || 0;
+  if (REALISASI_Q4 !== undefined) configEnv.REALISASI_Q4 = Number(REALISASI_Q4) || 0;
+
+  try {
+    const db = await readDB();
+    db.config = {
+      DATA_PERSISTENCE_MODE: configEnv.DATA_PERSISTENCE_MODE,
+      GAS_WEB_APP_URL: configEnv.GAS_WEB_APP_URL,
+      SPREADSHEET_ID: configEnv.SPREADSHEET_ID,
+      PAGU_ANGGARAN: configEnv.PAGU_ANGGARAN,
+      REALISASI_ANGGARAN: configEnv.REALISASI_ANGGARAN,
+      TARGET_REALISASI: configEnv.TARGET_REALISASI,
+      TARGET_Q1: configEnv.TARGET_Q1,
+      TARGET_Q2: configEnv.TARGET_Q2,
+      TARGET_Q3: configEnv.TARGET_Q3,
+      TARGET_Q4: configEnv.TARGET_Q4,
+      REALISASI_Q1: configEnv.REALISASI_Q1,
+      REALISASI_Q2: configEnv.REALISASI_Q2,
+      REALISASI_Q3: configEnv.REALISASI_Q3,
+      REALISASI_Q4: configEnv.REALISASI_Q4,
+    };
+    await writeDB(db);
+    res.json({ success: true, message: "Konfigurasi berhasil disimpan dan dipersistensi!", data: configEnv });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: "Gagal menyimpan konfigurasi ke file database." });
+  }
+});
+
+// AUTH LOGIN ENDPOINT
+app.post("/api/auth/login", async (req, res) => {
+  const { username, password } = req.body;
+
+  if (configEnv.DATA_PERSISTENCE_MODE === "sheet" && configEnv.GAS_WEB_APP_URL) {
+    try {
+      const gasResult = await proxyToGAS("getUsers", "GET");
+      if (gasResult && Array.isArray(gasResult)) {
+        const found = gasResult.find((u: any) => u.username === username && u.password === password);
+        if (found) {
+          if (found.status === "Nonaktif") {
+            return res.status(403).json({ success: false, message: "Akun Anda dinonaktifkan." });
+          }
+          const { password, ...userWithoutPassword } = found;
+          return res.json({ success: true, user: userWithoutPassword });
+        }
+      }
+    } catch (e: any) {
+      console.warn("GAS Auth failed, falling back to local DB auth:", e.message);
+    }
+  }
+
+  // Fallback / Local Login
+  const db = await readDB();
+  const user = db.users.find((u: any) => u.username === username && u.password === password);
+  if (user) {
+    if (user.status === "Nonaktif") {
+      return res.status(403).json({ success: false, message: "Akun Anda dinonaktifkan." });
+    }
+    const { password: _, ...userWithoutPassword } = user;
+    return res.json({ success: true, user: userWithoutPassword });
+  }
+
+  res.status(401).json({ success: false, message: "Username atau Password salah." });
+});
+
+// USERS CRUD
+app.get("/api/users", async (req, res) => {
+  if (configEnv.DATA_PERSISTENCE_MODE === "sheet" && configEnv.GAS_WEB_APP_URL) {
+    try {
+      const data = await proxyToGAS("getUsers", "GET");
+      return res.json({ success: true, data });
+    } catch (e: any) {
+      console.warn("GAS getUsers failed, falling back to local DB:", e.message);
+      const db = await readDB();
+      return res.json({ success: true, data: db.users, warning: e.message });
+    }
+  }
+  const db = await readDB();
+  res.json({ success: true, data: db.users });
+});
+
+app.post("/api/users", async (req, res) => {
+  const newUser = { id: "u_" + Date.now(), status: "Aktif", ...req.body };
+  if (configEnv.DATA_PERSISTENCE_MODE === "sheet" && configEnv.GAS_WEB_APP_URL) {
+    try {
+      const data = await proxyToGAS("createUser", "POST", newUser);
+      return res.json({ success: true, data });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, message: e.message });
+    }
+  }
+  const db = await readDB();
+  db.users.push(newUser);
+  await writeDB(db);
+  res.json({ success: true, data: newUser });
+});
+
+app.put("/api/users/:id", async (req, res) => {
+  const { id } = req.params;
+  const updatedData = req.body;
+
+  if (configEnv.DATA_PERSISTENCE_MODE === "sheet" && configEnv.GAS_WEB_APP_URL) {
+    try {
+      const data = await proxyToGAS("updateUser", "POST", { id, ...updatedData });
+      return res.json({ success: true, data });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, message: e.message });
+    }
+  }
+
+  const db = await readDB();
+  const index = db.users.findIndex((u: any) => u.id === id);
+  if (index !== -1) {
+    db.users[index] = { ...db.users[index], ...updatedData };
+    await writeDB(db);
+    return res.json({ success: true, data: db.users[index] });
+  }
+  res.status(404).json({ success: false, message: "User tidak ditemukan" });
+});
+
+app.delete("/api/users/:id", async (req, res) => {
+  const { id } = req.params;
+
+  if (configEnv.DATA_PERSISTENCE_MODE === "sheet" && configEnv.GAS_WEB_APP_URL) {
+    try {
+      const data = await proxyToGAS("deleteUser", "POST", { id });
+      return res.json({ success: true, data });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, message: e.message });
+    }
+  }
+
+  const db = await readDB();
+  db.users = db.users.filter((u: any) => u.id !== id);
+  await writeDB(db);
+  res.json({ success: true, message: "User berhasil dihapus" });
+});
+
+
+// PEMERIKSAAN CRUD
+app.get("/api/pemeriksaan", async (req, res) => {
+  if (configEnv.DATA_PERSISTENCE_MODE === "sheet" && configEnv.GAS_WEB_APP_URL) {
+    try {
+      const data = await proxyToGAS("getPemeriksaan", "GET");
+      return res.json({ success: true, data });
+    } catch (e: any) {
+      console.warn("GAS getPemeriksaan failed, falling back to local DB:", e.message);
+      const db = await readDB();
+      return res.json({ success: true, data: db.pemeriksaan, warning: e.message });
+    }
+  }
+  const db = await readDB();
+  res.json({ success: true, data: db.pemeriksaan });
+});
+
+app.post("/api/pemeriksaan", async (req, res) => {
+  const newRecord = {
+    id: "p_" + Date.now(),
+    created_at: new Date().toISOString(),
+    ...req.body,
+  };
+
+  if (configEnv.DATA_PERSISTENCE_MODE === "sheet" && configEnv.GAS_WEB_APP_URL) {
+    try {
+      const data = await proxyToGAS("createPemeriksaan", "POST", newRecord);
+      return res.json({ success: true, data });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, message: e.message });
+    }
+  }
+
+  const db = await readDB();
+  db.pemeriksaan.push(newRecord);
+  await writeDB(db);
+  res.json({ success: true, data: newRecord });
+});
+
+app.put("/api/pemeriksaan/:id", async (req, res) => {
+  const { id } = req.params;
+  const updatedData = req.body;
+
+  if (configEnv.DATA_PERSISTENCE_MODE === "sheet" && configEnv.GAS_WEB_APP_URL) {
+    try {
+      const data = await proxyToGAS("updatePemeriksaan", "POST", { id, ...updatedData });
+      return res.json({ success: true, data });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, message: e.message });
+    }
+  }
+
+  const db = await readDB();
+  const index = db.pemeriksaan.findIndex((p: any) => p.id === id);
+  if (index !== -1) {
+    db.pemeriksaan[index] = { ...db.pemeriksaan[index], ...updatedData };
+    await writeDB(db);
+    return res.json({ success: true, data: db.pemeriksaan[index] });
+  }
+  res.status(404).json({ success: false, message: "Pemeriksaan tidak ditemukan" });
+});
+
+app.delete("/api/pemeriksaan/:id", async (req, res) => {
+  const { id } = req.params;
+
+  if (configEnv.DATA_PERSISTENCE_MODE === "sheet" && configEnv.GAS_WEB_APP_URL) {
+    try {
+      const data = await proxyToGAS("deletePemeriksaan", "POST", { id });
+      return res.json({ success: true, data });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, message: e.message });
+    }
+  }
+
+  const db = await readDB();
+  db.pemeriksaan = db.pemeriksaan.filter((p: any) => p.id !== id);
+  // Also filter connected docs and temuan
+  db.dokumen = db.dokumen.filter((d: any) => d.pemeriksaan_id !== id);
+  db.temuan = db.temuan.filter((t: any) => t.pemeriksaan_id !== id);
+  await writeDB(db);
+  res.json({ success: true, message: "Pemeriksaan berhasil dihapus" });
+});
+
+
+// DOKUMEN CRUD
+app.get("/api/dokumen", async (req, res) => {
+  if (configEnv.DATA_PERSISTENCE_MODE === "sheet" && configEnv.GAS_WEB_APP_URL) {
+    try {
+      const data = await proxyToGAS("getDokumen", "GET");
+      return res.json({ success: true, data });
+    } catch (e: any) {
+      console.warn("GAS getDokumen failed, falling back to local DB:", e.message);
+      const db = await readDB();
+      return res.json({ success: true, data: db.dokumen, warning: e.message });
+    }
+  }
+  const db = await readDB();
+  res.json({ success: true, data: db.dokumen });
+});
+
+app.post("/api/dokumen", async (req, res) => {
+  const newDoc = { id: "d_" + Date.now(), status: "Belum Verifikasi", ...req.body };
+
+  if (configEnv.DATA_PERSISTENCE_MODE === "sheet" && configEnv.GAS_WEB_APP_URL) {
+    try {
+      const data = await proxyToGAS("createDokumen", "POST", newDoc);
+      return res.json({ success: true, data });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, message: e.message });
+    }
+  }
+
+  const db = await readDB();
+  db.dokumen.push(newDoc);
+  await writeDB(db);
+
+  // Trigger notification if not in sheet mode (sheet mode handles it inside Apps Script)
+  if (configEnv.DATA_PERSISTENCE_MODE !== "sheet") {
+    triggerNotification("dokumen_baru", newDoc);
+  }
+
+  res.json({ success: true, data: newDoc });
+});
+
+app.put("/api/dokumen/:id", async (req, res) => {
+  const { id } = req.params;
+  const updatedData = req.body;
+
+  if (configEnv.DATA_PERSISTENCE_MODE === "sheet" && configEnv.GAS_WEB_APP_URL) {
+    try {
+      const data = await proxyToGAS("updateDokumen", "POST", { id, ...updatedData });
+      return res.json({ success: true, data });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, message: e.message });
+    }
+  }
+
+  const db = await readDB();
+  const index = db.dokumen.findIndex((d: any) => d.id === id);
+  if (index !== -1) {
+    db.dokumen[index] = { ...db.dokumen[index], ...updatedData };
+    await writeDB(db);
+    return res.json({ success: true, data: db.dokumen[index] });
+  }
+  res.status(404).json({ success: false, message: "Dokumen tidak ditemukan" });
+});
+
+app.delete("/api/dokumen/:id", async (req, res) => {
+  const { id } = req.params;
+
+  if (configEnv.DATA_PERSISTENCE_MODE === "sheet" && configEnv.GAS_WEB_APP_URL) {
+    try {
+      const data = await proxyToGAS("deleteDokumen", "POST", { id });
+      return res.json({ success: true, data });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, message: e.message });
+    }
+  }
+
+  const db = await readDB();
+  db.dokumen = db.dokumen.filter((d: any) => d.id !== id);
+  await writeDB(db);
+  res.json({ success: true, message: "Dokumen berhasil dihapus" });
+});
+
+
+// TEMUAN CRUD
+app.get("/api/temuan", async (req, res) => {
+  if (configEnv.DATA_PERSISTENCE_MODE === "sheet" && configEnv.GAS_WEB_APP_URL) {
+    try {
+      const data = await proxyToGAS("getTemuan", "GET");
+      return res.json({ success: true, data });
+    } catch (e: any) {
+      console.warn("GAS getTemuan failed, falling back to local DB:", e.message);
+      const db = await readDB();
+      return res.json({ success: true, data: db.temuan, warning: e.message });
+    }
+  }
+  const db = await readDB();
+  res.json({ success: true, data: db.temuan });
+});
+
+app.post("/api/temuan", async (req, res) => {
+  const newTemuan = {
+    id: "t_" + Date.now(),
+    tanggal_update: new Date().toISOString().split("T")[0],
+    ...req.body,
+  };
+
+  if (configEnv.DATA_PERSISTENCE_MODE === "sheet" && configEnv.GAS_WEB_APP_URL) {
+    try {
+      const data = await proxyToGAS("createTemuan", "POST", newTemuan);
+      return res.json({ success: true, data });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, message: e.message });
+    }
+  }
+
+  const db = await readDB();
+  db.temuan.push(newTemuan);
+  await writeDB(db);
+
+  // Trigger notification if status is Selesai or Closed (and not in sheet mode)
+  if (configEnv.DATA_PERSISTENCE_MODE !== "sheet") {
+    if (newTemuan.status_tindak_lanjut === "Selesai" || newTemuan.status_tindak_lanjut === "Closed") {
+      triggerNotification("temuan_closed", newTemuan);
+    }
+  }
+
+  res.json({ success: true, data: newTemuan });
+});
+
+app.put("/api/temuan/:id", async (req, res) => {
+  const { id } = req.params;
+  const updatedData = req.body;
+
+  if (configEnv.DATA_PERSISTENCE_MODE === "sheet" && configEnv.GAS_WEB_APP_URL) {
+    try {
+      const data = await proxyToGAS("updateTemuan", "POST", { id, ...updatedData });
+      return res.json({ success: true, data });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, message: e.message });
+    }
+  }
+
+  const db = await readDB();
+  const index = db.temuan.findIndex((t: any) => t.id === id);
+  if (index !== -1) {
+    const originalStatus = db.temuan[index].status_tindak_lanjut;
+    db.temuan[index] = { ...db.temuan[index], ...updatedData };
+    await writeDB(db);
+
+    // Trigger notification if status is changed to Selesai or Closed (and not in sheet mode)
+    if (configEnv.DATA_PERSISTENCE_MODE !== "sheet") {
+      if ((updatedData.status_tindak_lanjut === "Selesai" || updatedData.status_tindak_lanjut === "Closed") && originalStatus !== "Selesai" && originalStatus !== "Closed") {
+        triggerNotification("temuan_closed", db.temuan[index]);
+      }
+    }
+
+    return res.json({ success: true, data: db.temuan[index] });
+  }
+  res.status(404).json({ success: false, message: "Temuan tidak ditemukan" });
+});
+
+app.delete("/api/temuan/:id", async (req, res) => {
+  const { id } = req.params;
+
+  if (configEnv.DATA_PERSISTENCE_MODE === "sheet" && configEnv.GAS_WEB_APP_URL) {
+    try {
+      const data = await proxyToGAS("deleteTemuan", "POST", { id });
+      return res.json({ success: true, data });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, message: e.message });
+    }
+  }
+
+  const db = await readDB();
+  db.temuan = db.temuan.filter((t: any) => t.id !== id);
+  await writeDB(db);
+  res.json({ success: true, message: "Temuan berhasil dihapus" });
+});
+
+// MASTER SATWAS
+app.get("/api/satwas", async (req, res) => {
+  if (configEnv.DATA_PERSISTENCE_MODE === "sheet" && configEnv.GAS_WEB_APP_URL) {
+    try {
+      const data = await proxyToGAS("getSatwas", "GET");
+      return res.json({ success: true, data });
+    } catch (e: any) {
+      console.warn("GAS getSatwas failed, falling back to local DB:", e.message);
+      const db = await readDB();
+      return res.json({ success: true, data: db.satwas, warning: e.message });
+    }
+  }
+  const db = await readDB();
+  res.json({ success: true, data: db.satwas });
+});
+
+
+// DASHBOARD STATS ENDPOINT
+app.get("/api/dashboard", async (req, res) => {
+  let list: any[] = [];
+  const isSheetMode = configEnv.DATA_PERSISTENCE_MODE === "sheet" && !!configEnv.GAS_WEB_APP_URL;
+
+  if (isSheetMode) {
+    try {
+      // First attempt: Get pre-computed stats directly from Google Apps Script
+      const data = await proxyToGAS("getDashboard", "GET");
+      if (data && typeof data === "object" && !Array.isArray(data)) {
+        return res.json({ success: true, data });
+      }
+    } catch (e: any) {
+      console.warn("GAS getDashboard direct call failed, attempting local calculation from live sheet data:", e.message);
+    }
+
+    try {
+      // Second attempt (Active fallback): Fetch live examinations directly from Google Sheet and compute stats locally
+      const fetched = await proxyToGAS("getPemeriksaan", "GET");
+      if (Array.isArray(fetched)) {
+        list = fetched;
+      } else {
+        const db = await readDB();
+        list = db.pemeriksaan || [];
+      }
+    } catch (e: any) {
+      console.warn("Fallback to Google Sheet getPemeriksaan failed, using local JSON database fallback:", e.message);
+      const db = await readDB();
+      list = db.pemeriksaan || [];
+    }
+  } else {
+    // Standard Local Persistence Mode
+    const db = await readDB();
+    list = db.pemeriksaan || [];
+  }
+
+  // Calculate live statistics
+  const totalPemeriksaan = list.length;
+  const totalTaat = list.filter((p: any) => p.status_ketaatan === "TAAT").length;
+  const totalTidakTaat = list.filter((p: any) => p.status_ketaatan === "TIDAK TAAT").length;
+
+  let totalNilai = 0;
+  let nilaiTertinggi = 0;
+  let nilaiTerendah = list.length > 0 ? 100 : 0;
+
+  list.forEach((p: any) => {
+    const val = Number(p.nilai_total) || 0;
+    totalNilai += val;
+    if (val > nilaiTertinggi) nilaiTertinggi = val;
+    if (val < nilaiTerendah) nilaiTerendah = val;
+  });
+
+  const rataRataNilai = totalPemeriksaan > 0 ? Number((totalNilai / totalPemeriksaan).toFixed(2)) : 0;
+
+  // Monthly breakdown partition
+  const months = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agt", "Sep", "Okt", "Nov", "Des"];
+  const monthlyCounts = Array(12).fill(0);
+  list.forEach((p: any) => {
+    if (p.tanggal) {
+      const m = new Date(p.tanggal).getMonth();
+      if (m >= 0 && m < 12) {
+        monthlyCounts[m]++;
+      }
+    }
+  });
+
+  const chartPemeriksaanBulanan = months.map((bulan, idx) => ({
+    bulan,
+    jumlah: monthlyCounts[idx],
+  }));
+
+  // Ketaatan Pie representation
+  const chartKetaatan = [
+    { name: "Taat", value: totalTaat },
+    { name: "Tidak Taat", value: totalTidakTaat },
+  ];
+
+  // Satwas Performance statistics
+  const satwasMap: Record<string, { total: number; count: number }> = {};
+  list.forEach((p: any) => {
+    const s = p.satwas || "Lainnya";
+    const v = Number(p.nilai_total) || 0;
+    if (!satwasMap[s]) {
+      satwasMap[s] = { total: 0, count: 0 };
+    }
+    satwasMap[s].total += v;
+    satwasMap[s].count++;
+  });
+
+  const chartNilaiSatwas = Object.keys(satwasMap).map((satwas) => ({
+    satwas,
+    rataRata: Number((satwasMap[satwas].total / satwasMap[satwas].count).toFixed(2)),
+    jumlah: satwasMap[satwas].count,
+  }));
+
+  // Annual level evaluations representation
+  const chartTrendTahunan = [
+    { tahun: "2024", rataRata: 75.2 },
+    { tahun: "2025", rataRata: 78.5 },
+    { tahun: "2026", rataRata: rataRataNilai || 82.8 },
+  ];
+
+  const paguVal = Number(configEnv.PAGU_ANGGARAN) || 0;
+  const realisasiVal = Number(configEnv.REALISASI_ANGGARAN) || 0;
+  const targetVal = Number(configEnv.TARGET_REALISASI) || 0;
+  const sisaVal = paguVal - realisasiVal;
+  const persentaseVal = paguVal > 0 ? Number(((realisasiVal / paguVal) * 100).toFixed(2)) : 0;
+  const persentaseTargetVal = targetVal > 0 ? Number(((realisasiVal / targetVal) * 100).toFixed(2)) : 0;
+
+  const targetQ1Val = configEnv.TARGET_Q1 !== undefined ? Number(configEnv.TARGET_Q1) : 250000000;
+  const targetQ2Val = configEnv.TARGET_Q2 !== undefined ? Number(configEnv.TARGET_Q2) : 250000000;
+  const targetQ3Val = configEnv.TARGET_Q3 !== undefined ? Number(configEnv.TARGET_Q3) : 250000000;
+  const targetQ4Val = configEnv.TARGET_Q4 !== undefined ? Number(configEnv.TARGET_Q4) : 250000000;
+
+  const realisasiQ1Val = configEnv.REALISASI_Q1 !== undefined ? Number(configEnv.REALISASI_Q1) : 220000000;
+  const realisasiQ2Val = configEnv.REALISASI_Q2 !== undefined ? Number(configEnv.REALISASI_Q2) : 230000000;
+  const realisasiQ3Val = configEnv.REALISASI_Q3 !== undefined ? Number(configEnv.REALISASI_Q3) : 200000000;
+  const realisasiQ4Val = configEnv.REALISASI_Q4 !== undefined ? Number(configEnv.REALISASI_Q4) : 175000000;
+
+  res.json({
+    success: true,
+    data: {
+      totalPemeriksaan,
+      totalTaat,
+      totalTidakTaat,
+      rataRataNilai,
+      nilaiTertinggi,
+      nilaiTerendah,
+      chartPemeriksaanBulanan,
+      chartKetaatan,
+      chartNilaiSatwas,
+      chartTrendTahunan,
+      paguAnggaran: paguVal,
+      realisasiAnggaran: realisasiVal,
+      sisaAnggaran: sisaVal,
+      persentasePenyerapan: persentaseVal,
+      targetRealisasi: targetVal,
+      persentasePenyerapanTarget: persentaseTargetVal,
+      targetQ1: targetQ1Val,
+      targetQ2: targetQ2Val,
+      targetQ3: targetQ3Val,
+      targetQ4: targetQ4Val,
+      realisasiQ1: realisasiQ1Val,
+      realisasiQ2: realisasiQ2Val,
+      realisasiQ3: realisasiQ3Val,
+      realisasiQ4: realisasiQ4Val,
+    },
+  });
+});
+
+
+// AUDIT LOGS ENDPOINTS
+app.get("/api/logs", async (req, res) => {
+  try {
+    const db = await readDB();
+    const logs = db.logs || [];
+    const sortedLogs = [...logs].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    res.json({ success: true, data: sortedLogs });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: "Gagal mengambil log aktivitas." });
+  }
+});
+
+app.post("/api/logs", async (req, res) => {
+  try {
+    const db = await readDB();
+    const newLog = {
+      id: "log_" + Date.now() + "_" + Math.floor(Math.random() * 1000),
+      timestamp: new Date().toISOString(),
+      ...req.body
+    };
+    if (!db.logs) {
+      db.logs = [];
+    }
+    db.logs.push(newLog);
+    if (db.logs.length > 2000) {
+      db.logs = db.logs.slice(-2000);
+    }
+    await writeDB(db);
+    res.json({ success: true, data: newLog });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: "Gagal menyimpan log aktivitas." });
+  }
+});
+
+
+// Start server & handle Vite environment
+async function startServer() {
+  // Read DB on start to populate persistent config options
+  try {
+    await readDB();
+    console.log("Persistent configuration loaded:", configEnv);
+  } catch (err: any) {
+    console.warn("Could not pre-load persistent config on server startup:", err.message);
+  }
+
+  if (process.env.NODE_ENV !== "production") {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+  }
+
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server SDKP Biak running on http://localhost:${PORT}`);
+  });
+}
+
+startServer();
