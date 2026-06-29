@@ -144,7 +144,15 @@ export const ConfigSettings: React.FC<ConfigSettingsProps> = ({ config, onUpdate
     // Load Apps Script code template
     setLoadingCode(true);
     fetch("/api/appsscript-code")
-      .then((res) => res.json())
+      .then(async (res) => {
+        const text = await res.text();
+        if (!text) return { success: false };
+        try {
+          return JSON.parse(text);
+        } catch {
+          return { success: false };
+        }
+      })
       .then((res) => {
         if (res.success) {
           setAppsScriptCode(res.code);

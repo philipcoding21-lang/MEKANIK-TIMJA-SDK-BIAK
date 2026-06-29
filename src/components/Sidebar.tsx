@@ -11,7 +11,8 @@ import {
   LogOut,
   Menu,
   X,
-  History
+  History,
+  Chrome
 } from "lucide-react";
 import { User, UserRole } from "../types";
 import kepolisianKhususLogo from "../assets/images/polsus_badge_real_1782639227590.jpg";
@@ -69,6 +70,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, user,
       label: "Log Aktivitas Audit",
       icon: History,
       roles: ["Administrator"],
+    },
+    {
+      id: "workspace",
+      label: "Google Workspace API",
+      icon: Chrome,
+      roles: ["Administrator", "Kepala Stasiun", "Verifikator", "Satwas"],
     },
     {
       id: "config",

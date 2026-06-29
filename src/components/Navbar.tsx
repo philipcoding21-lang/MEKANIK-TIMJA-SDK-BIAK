@@ -1,24 +1,15 @@
 import React from "react";
-import { Database, CloudLightning, ShieldAlert, Anchor } from "lucide-react";
+import { Database, CloudLightning, ShieldAlert, Anchor, RefreshCw } from "lucide-react";
 
 interface NavbarProps {
   activeTab: string;
   config: { DATA_PERSISTENCE_MODE: string; GAS_WEB_APP_URL: string };
   onSettingClick: () => void;
+  onSyncClick?: () => void;
+  isSyncing?: boolean;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ activeTab, config, onSettingClick }) => {
-  // Format current date matching Indonesia Locale
-  const formatCurrentDateLocal = () => {
-    const d = new Date("2026-06-10T15:03:00Z"); // matching UTC time or user local
-    return d.toLocaleDateString("id-ID", {
-      weekday: "long",
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    });
-  };
-
+export const Navbar: React.FC<NavbarProps> = ({ activeTab, config, onSettingClick, onSyncClick, isSyncing = false }) => {
   const getHeaderTitle = () => {
     switch (activeTab) {
       case "dashboard":
@@ -33,6 +24,8 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, config, onSettingClic
         return "Pusat Laporan & Ekspor Data";
       case "users":
         return "Manajemen User & Hak Akses Kontrol";
+      case "workspace":
+        return "Google Workspace REST API Integrasi (Calendar, Forms, Keep)";
       case "config":
         return "Integrasi Google Spreadsheet & REST API";
       default:
@@ -69,12 +62,23 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, config, onSettingClic
           <span className="truncate">{getHeaderTitle()}</span>
         </h1>
         <p className="text-xs text-slate-500 font-medium">
-          Mekanik Tim Kerja Sumber Daya Kelautan (TIMJA SDK) • {formatCurrentDateLocal()}
+          Mekanik Tim Kerja Sumber Daya Kelautan (TIMJA SDK)
         </p>
       </div>
 
-      {/* Persistence Status Chip */}
+      {/* Persistence Status Chip & Manual Sync */}
       <div className="flex items-center gap-3">
+        {onSyncClick && (
+          <button
+            onClick={onSyncClick}
+            disabled={isSyncing}
+            className={`flex items-center justify-center p-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 transition-all ${isSyncing ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+            title="Sinkronisasi Data Sekarang"
+          >
+            <RefreshCw className={`w-4 h-4 ${isSyncing ? "animate-spin text-sky-500" : ""}`} />
+          </button>
+        )}
+
         {config.DATA_PERSISTENCE_MODE === "sheet" ? (
           <button
             onClick={onSettingClick}

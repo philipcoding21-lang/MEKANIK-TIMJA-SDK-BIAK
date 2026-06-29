@@ -23,7 +23,15 @@ async function googleApiFetch<T>(url: string, token: string, options: RequestIni
     }
     throw new Error(parsedErr.error?.message || `Google Sheets API Error (${res.status})`);
   }
-  return res.json() as Promise<T>;
+  const text = await res.text();
+  if (!text) {
+    return {} as T;
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch (e) {
+    throw new Error(`Google Sheets API Error: Respon bukan JSON yang valid. ${text.slice(0, 100)}`);
+  }
 }
 
 export const googleSheetsApi = {

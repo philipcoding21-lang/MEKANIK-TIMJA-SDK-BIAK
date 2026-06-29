@@ -23,7 +23,15 @@ async function workspaceApiFetch<T>(url: string, token: string, options: Request
     }
     throw new Error(parsedErr.error?.message || `Workspace API Error (${res.status})`);
   }
-  return res.json() as Promise<T>;
+  const text = await res.text();
+  if (!text) {
+    return {} as T;
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch (e) {
+    throw new Error(`Workspace API Error: Respon bukan JSON yang valid. ${text.slice(0, 100)}`);
+  }
 }
 
 export const googleWorkspaceApi = {
@@ -279,6 +287,95 @@ export const googleWorkspaceApi = {
       }
     } catch (err: any) {
       console.warn("Direct Chat space API failed, falling back to Chat webhook or console:", err.message);
+    }
+  },
+
+  /**
+   * Google Calendar API: List events from primary calendar
+   */
+  async listCalendarEvents(token: string): Promise<any[]> {
+    const url = "https://www.googleapis.com/calendar/v3/calendars/primary/events?orderBy=startTime&singleEvents=true&maxResults=50";
+    try {
+      const res = await workspaceApiFetch<{ items?: any[] }>(url, token);
+      return res.items || [];
+    } catch (err: any) {
+      console.warn("Failed to fetch Google Calendar events:", err.message);
+      return [];
+    }
+  },
+
+  /**
+   * Google Calendar API: Create a new calendar event (e.g., plan of examination)
+   */
+  async createCalendarEvent(
+    token: string,
+    event: { summary: string; description: string; start: string; end: string }
+  ): Promise<any> {
+    const url = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
+    const body = {
+      summary: event.summary,
+      description: event.description,
+      start: {
+        dateTime: new Date(event.start).toISOString(),
+        timeZone: "Asia/Jakarta"
+      },
+      end: {
+        dateTime: new Date(event.end).toISOString(),
+        timeZone: "Asia/Jakarta"
+      }
+    };
+    return workspaceApiFetch<any>(url, token, {
+      method: "POST",
+      body: JSON.stringify(body)
+    });
+  },
+
+  /**
+   * Google Calendar API: Delete a calendar event
+   */
+  async deleteCalendarEvent(token: string, eventId: string): Promise<void> {
+    const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`;
+    await workspaceApiFetch<void>(url, token, {
+      method: "DELETE"
+    });
+  },
+
+  /**
+   * Google Forms API: Create a brand new Google Form
+   */
+  async createGoogleForm(token: string, title: string, documentTitle: string): Promise<any> {
+    const url = "https://forms.googleapis.com/v1/forms";
+    const body = {
+      info: {
+        title: title,
+        documentTitle: documentTitle
+      }
+    };
+    return workspaceApiFetch<any>(url, token, {
+      method: "POST",
+      body: JSON.stringify(body)
+    });
+  },
+
+  /**
+   * Google Forms API: Get detailed form structure
+   */
+  async getGoogleFormDetails(token: string, formId: string): Promise<any> {
+    const url = `https://forms.googleapis.com/v1/forms/${formId}`;
+    return workspaceApiFetch<any>(url, token);
+  },
+
+  /**
+   * Google Forms API: Get submissions / responses
+   */
+  async getGoogleFormResponses(token: string, formId: string): Promise<any[]> {
+    const url = `https://forms.googleapis.com/v1/forms/${formId}/responses`;
+    try {
+      const res = await workspaceApiFetch<{ responses?: any[] }>(url, token);
+      return res.responses || [];
+    } catch (err: any) {
+      console.warn("Failed to fetch Google Form responses:", err.message);
+      return [];
     }
   }
 };

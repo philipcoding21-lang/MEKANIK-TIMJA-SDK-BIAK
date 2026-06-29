@@ -32,9 +32,18 @@ let cachedConfig: {
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, options);
-  const json = await res.json();
+  const text = await res.text();
+  if (!text) {
+    throw new Error(`Respon kosong dari server (Status: ${res.status}).`);
+  }
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    throw new Error(`Respon server bukan JSON yang valid (Status: ${res.status}): ${text.slice(0, 100)}`);
+  }
   if (!res.ok) {
-    throw new Error(json.message || "Request failed");
+    throw new Error(json.message || "Permintaan gagal");
   }
   return json.data as T;
 }
@@ -167,7 +176,19 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
     });
-    const json = await res.json();
+    
+    const text = await res.text();
+    if (!text) {
+      throw new Error(`Koneksi atau respon server kosong (Status: ${res.status}).`);
+    }
+
+    let json;
+    try {
+      json = JSON.parse(text);
+    } catch (e) {
+      throw new Error(`Gagal memproses respon server: Respon bukan JSON yang valid (Status: ${res.status}).`);
+    }
+
     if (!res.ok || !json.success) {
       throw new Error(json.message || "Username atau password salah");
     }
@@ -517,6 +538,84 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(log),
+    });
+  },
+
+  // Keep Notes Local DB CRUD
+  getNotes: async (): Promise<any[]> => {
+    return request<any[]>(`${BASE_URL}/notes`);
+  },
+
+  createNote: async (note: { title: string; content: string; color?: string; pinned?: boolean }) => {
+    return request<any>(`${BASE_URL}/notes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(note),
+    });
+  },
+
+  updateNote: async (id: string, note: { title?: string; content?: string; color?: string; pinned?: boolean }) => {
+    return request<any>(`${BASE_URL}/notes/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(note),
+    });
+  },
+
+  deleteNote: async (id: string) => {
+    return request<any>(`${BASE_URL}/notes/${id}`, {
+      method: "DELETE",
+    });
+  },
+
+  // Local Calendar Schedules CRUD
+  getCalendarEvents: async (): Promise<any[]> => {
+    return request<any[]>(`${BASE_URL}/calendar-events`);
+  },
+
+  createCalendarEvent: async (event: { 
+    summary: string; 
+    description: string; 
+    start: string; 
+    end: string; 
+    googleEventId?: string; 
+    pelakuUsahaId?: string; 
+  }) => {
+    return request<any>(`${BASE_URL}/calendar-events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(event),
+    });
+  },
+
+  deleteCalendarEvent: async (id: string) => {
+    return request<any>(`${BASE_URL}/calendar-events/${id}`, {
+      method: "DELETE",
+    });
+  },
+
+  // Google Forms Register CRUD
+  getGoogleForms: async (): Promise<any[]> => {
+    return request<any[]>(`${BASE_URL}/google-forms`);
+  },
+
+  createGoogleForm: async (form: { 
+    formId: string; 
+    title: string; 
+    description?: string; 
+    responderUri?: string; 
+    editUri?: string; 
+  }) => {
+    return request<any>(`${BASE_URL}/google-forms`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(form),
+    });
+  },
+
+  deleteGoogleForm: async (id: string) => {
+    return request<any>(`${BASE_URL}/google-forms/${id}`, {
+      method: "DELETE",
     });
   },
 };

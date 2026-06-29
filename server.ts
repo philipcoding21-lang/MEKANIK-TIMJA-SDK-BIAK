@@ -253,38 +253,48 @@ app.post("/api/config", async (req, res) => {
 
 // AUTH LOGIN ENDPOINT
 app.post("/api/auth/login", async (req, res) => {
-  const { username, password } = req.body;
+  try {
+    const { username, password } = req.body || {};
 
-  if (configEnv.DATA_PERSISTENCE_MODE === "sheet" && configEnv.GAS_WEB_APP_URL) {
-    try {
-      const gasResult = await proxyToGAS("getUsers", "GET");
-      if (gasResult && Array.isArray(gasResult)) {
-        const found = gasResult.find((u: any) => u.username === username && u.password === password);
-        if (found) {
-          if (found.status === "Nonaktif") {
-            return res.status(403).json({ success: false, message: "Akun Anda dinonaktifkan." });
+    if (!username || !password) {
+      return res.status(400).json({ success: false, message: "Username dan password wajib diisi." });
+    }
+
+    if (configEnv.DATA_PERSISTENCE_MODE === "sheet" && configEnv.GAS_WEB_APP_URL) {
+      try {
+        const gasResult = await proxyToGAS("getUsers", "GET");
+        if (gasResult && Array.isArray(gasResult)) {
+          const found = gasResult.find((u: any) => u.username === username && u.password === password);
+          if (found) {
+            if (found.status === "Nonaktif") {
+              return res.status(403).json({ success: false, message: "Akun Anda dinonaktifkan." });
+            }
+            const { password, ...userWithoutPassword } = found;
+            return res.json({ success: true, user: userWithoutPassword });
           }
-          const { password, ...userWithoutPassword } = found;
-          return res.json({ success: true, user: userWithoutPassword });
         }
+      } catch (e: any) {
+        console.warn("GAS Auth failed, falling back to local DB auth:", e.message);
       }
-    } catch (e: any) {
-      console.warn("GAS Auth failed, falling back to local DB auth:", e.message);
     }
-  }
 
-  // Fallback / Local Login
-  const db = await readDB();
-  const user = db.users.find((u: any) => u.username === username && u.password === password);
-  if (user) {
-    if (user.status === "Nonaktif") {
-      return res.status(403).json({ success: false, message: "Akun Anda dinonaktifkan." });
+    // Fallback / Local Login
+    const db = await readDB();
+    const users = db?.users || [];
+    const user = users.find((u: any) => u.username === username && u.password === password);
+    if (user) {
+      if (user.status === "Nonaktif") {
+        return res.status(403).json({ success: false, message: "Akun Anda dinonaktifkan." });
+      }
+      const { password: _, ...userWithoutPassword } = user;
+      return res.json({ success: true, user: userWithoutPassword });
     }
-    const { password: _, ...userWithoutPassword } = user;
-    return res.json({ success: true, user: userWithoutPassword });
-  }
 
-  res.status(401).json({ success: false, message: "Username atau Password salah." });
+    return res.status(401).json({ success: false, message: "Username atau Password salah." });
+  } catch (error: any) {
+    console.error("Critical error in /api/auth/login:", error);
+    return res.status(500).json({ success: false, message: "Terjadi kesalahan internal pada server: " + (error.message || "Unknown error") });
+  }
 });
 
 // USERS CRUD
@@ -821,6 +831,132 @@ app.post("/api/logs", async (req, res) => {
     res.json({ success: true, data: newLog });
   } catch (error: any) {
     res.status(500).json({ success: false, message: "Gagal menyimpan log aktivitas." });
+  }
+});
+
+
+// NOTES ENDPOINTS
+app.get("/api/notes", async (req, res) => {
+  try {
+    const db = await readDB();
+    if (!db.notes) db.notes = [];
+    res.json({ success: true, data: db.notes });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.post("/api/notes", async (req, res) => {
+  try {
+    const db = await readDB();
+    if (!db.notes) db.notes = [];
+    const newNote = { id: "note_" + Date.now(), timestamp: new Date().toISOString(), ...req.body };
+    db.notes.push(newNote);
+    await writeDB(db);
+    res.json({ success: true, data: newNote });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.put("/api/notes/:id", async (req, res) => {
+  try {
+    const db = await readDB();
+    if (!db.notes) db.notes = [];
+    const index = db.notes.findIndex((n: any) => n.id === req.params.id);
+    if (index !== -1) {
+      db.notes[index] = { ...db.notes[index], ...req.body, timestamp: new Date().toISOString() };
+      await writeDB(db);
+      res.json({ success: true, data: db.notes[index] });
+    } else {
+      res.status(404).json({ success: false, message: "Catatan tidak ditemukan" });
+    }
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.delete("/api/notes/:id", async (req, res) => {
+  try {
+    const db = await readDB();
+    if (!db.notes) db.notes = [];
+    db.notes = db.notes.filter((n: any) => n.id !== req.params.id);
+    await writeDB(db);
+    res.json({ success: true, message: "Catatan berhasil dihapus" });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// CALENDAR EVENTS ENDPOINTS
+app.get("/api/calendar-events", async (req, res) => {
+  try {
+    const db = await readDB();
+    if (!db.calendar_events) db.calendar_events = [];
+    res.json({ success: true, data: db.calendar_events });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.post("/api/calendar-events", async (req, res) => {
+  try {
+    const db = await readDB();
+    if (!db.calendar_events) db.calendar_events = [];
+    const newEvent = { id: "event_" + Date.now(), ...req.body };
+    db.calendar_events.push(newEvent);
+    await writeDB(db);
+    res.json({ success: true, data: newEvent });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.delete("/api/calendar-events/:id", async (req, res) => {
+  try {
+    const db = await readDB();
+    if (!db.calendar_events) db.calendar_events = [];
+    db.calendar_events = db.calendar_events.filter((e: any) => e.id !== req.params.id);
+    await writeDB(db);
+    res.json({ success: true, message: "Agenda berhasil dihapus" });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// GOOGLE FORMS ENDPOINTS
+app.get("/api/google-forms", async (req, res) => {
+  try {
+    const db = await readDB();
+    if (!db.google_forms) db.google_forms = [];
+    res.json({ success: true, data: db.google_forms });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.post("/api/google-forms", async (req, res) => {
+  try {
+    const db = await readDB();
+    if (!db.google_forms) db.google_forms = [];
+    const newForm = { id: "form_" + Date.now(), created_at: new Date().toISOString(), ...req.body };
+    db.google_forms.push(newForm);
+    await writeDB(db);
+    res.json({ success: true, data: newForm });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.delete("/api/google-forms/:id", async (req, res) => {
+  try {
+    const db = await readDB();
+    if (!db.google_forms) db.google_forms = [];
+    db.google_forms = db.google_forms.filter((f: any) => f.id !== req.params.id);
+    await writeDB(db);
+    res.json({ success: true, message: "Formulir berhasil dihapus" });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 

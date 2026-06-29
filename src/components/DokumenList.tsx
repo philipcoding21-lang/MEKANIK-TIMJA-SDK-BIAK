@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Dokumen, Pemeriksaan } from "../types";
 import { 
   Link, 
@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { getAccessToken } from "../lib/firebaseAuth";
 import { googleSheetsApi } from "../lib/googleSheets";
+import { useToast } from "./Toast";
 
 interface DokumenListProps {
   documents: Dokumen[];
@@ -36,10 +37,48 @@ export const DokumenList: React.FC<DokumenListProps> = ({
   onVerifyDoc,
   onDeleteDoc,
 }) => {
+  const { warning } = useToast();
   const [search, setSearch] = useState("");
   const [docFilter, setDocFilter] = useState("All");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+
+  const docLength = documents.length;
+  const pemeriksaanLength = pemeriksaanList.length;
+
+  useEffect(() => {
+    let overdueCount = 0;
+    let approachingCount = 0;
+
+    documents.forEach((doc) => {
+      const parent = pemeriksaanList.find((p) => p.id === doc.pemeriksaan_id);
+      if (parent && parent.tanggal && doc.status === "Belum Verifikasi") {
+        const inspectDate = new Date(parent.tanggal);
+        const currentDate = new Date();
+        inspectDate.setHours(0, 0, 0, 0);
+        currentDate.setHours(0, 0, 0, 0);
+        const diffTime = currentDate.getTime() - inspectDate.getTime();
+        const days = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+        if (days >= 14) {
+          overdueCount++;
+        } else if (days >= 11) {
+          approachingCount++;
+        }
+      }
+    });
+
+    if (overdueCount > 0 || approachingCount > 0) {
+      let msg = "";
+      if (overdueCount > 0 && approachingCount > 0) {
+        msg = `Perhatian: Terdapat ${overdueCount} berkas LEWAT TENGGAT (Overdue) dan ${approachingCount} berkas MENDEKATI JATUH TEMPO (< 3 hari) yang belum diverifikasi!`;
+      } else if (overdueCount > 0) {
+        msg = `Perhatian: Terdapat ${overdueCount} berkas yang telah MELEBIHI batas waktu verifikasi 14 hari!`;
+      } else {
+        msg = `Peringatan: Terdapat ${approachingCount} berkas yang mendekati batas waktu verifikasi (tersisa <= 3 hari)!`;
+      }
+      warning(msg, 6000);
+    }
+  }, [docLength, pemeriksaanLength]);
 
   // Form block triggers
   const [showAddForm, setShowAddForm] = useState(false);
@@ -417,9 +456,11 @@ export const DokumenList: React.FC<DokumenListProps> = ({
           {filteredDocs.map((doc) => {
             const parent = getPemeriksaanInfo(doc.pemeriksaan_id);
             
-            // Calculate overdue status: status is "Belum Verifikasi" and elapsed days since inspection >= 14 days
+            // Calculate overdue/approaching status: status is "Belum Verifikasi" and elapsed days since inspection >= 14 days
             let isOverdue = false;
+            let isApproaching = false;
             let daysElapsed = 0;
+            let daysRemaining = 0;
             if (parent && parent.tanggal && doc.status === "Belum Verifikasi") {
               const inspectDate = new Date(parent.tanggal);
               const currentDate = new Date();
@@ -429,6 +470,9 @@ export const DokumenList: React.FC<DokumenListProps> = ({
               daysElapsed = Math.floor(diffTime / (1000 * 60 * 60 * 24));
               if (daysElapsed >= 14) {
                 isOverdue = true;
+              } else if (daysElapsed >= 11) {
+                isApproaching = true;
+                daysRemaining = 14 - daysElapsed;
               }
             }
 
@@ -438,6 +482,8 @@ export const DokumenList: React.FC<DokumenListProps> = ({
                 className={`rounded-2xl border p-5 shadow-sm hover:shadow-md transition-all flex flex-col justify-between gap-4 ${
                   isOverdue 
                     ? "bg-rose-50/15 border-rose-300 ring-1 ring-rose-200" 
+                    : isApproaching
+                    ? "bg-amber-50/20 border-amber-300 ring-1 ring-amber-300/30"
                     : "bg-white border-slate-200"
                 }`}
               >
@@ -450,6 +496,12 @@ export const DokumenList: React.FC<DokumenListProps> = ({
                         <span className="bg-rose-600 text-white px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider flex items-center gap-1 animate-pulse shadow-xs">
                           <span className="w-1.5 h-1.5 rounded-full bg-white inline-block animate-ping" />
                           OVERDUE
+                        </span>
+                      )}
+                      {isApproaching && (
+                        <span className="bg-amber-500 text-white px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider flex items-center gap-1 animate-pulse shadow-xs">
+                          <span className="w-1.5 h-1.5 rounded-full bg-white inline-block animate-ping" />
+                          DEADLINE {daysRemaining}H
                         </span>
                       )}
                       <span
@@ -480,6 +532,16 @@ export const DokumenList: React.FC<DokumenListProps> = ({
                         <div className="text-[10px] font-bold leading-normal">
                           Lewat Tenggat Verifikasi ({daysElapsed} Hari)
                           <span className="block text-[9px] text-rose-500 font-semibold font-sans mt-0.5">Batas waktu penyerapan & validasi berkas adalah 14 hari sejak giat dilaksanakan.</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {isApproaching && (
+                      <div className="mt-3 p-2.5 rounded-xl bg-amber-50 border border-amber-200 flex items-start gap-2 text-amber-800">
+                        <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-600 animate-bounce" />
+                        <div className="text-[10px] font-bold leading-normal">
+                          Mendekati Tenggat Verifikasi (Sisa {daysRemaining} Hari)
+                          <span className="block text-[9px] text-amber-600 font-semibold font-sans mt-0.5">Batas waktu verifikasi tinggal {daysRemaining} hari lagi sebelum melampaui batas 14 hari.</span>
                         </div>
                       </div>
                     )}
