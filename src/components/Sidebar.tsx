@@ -79,12 +79,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, user,
       roles: ["Administrator", "Kepala Stasiun", "Verifikator", "Satwas"],
     },
     {
-      id: "ai-assistant",
-      label: "Asisten Suara AI (TTS)",
-      icon: Volume2,
-      roles: ["Administrator", "Kepala Stasiun", "Verifikator", "Satwas"],
-    },
-    {
       id: "config",
       label: "Pengaturan API / Sheet",
       icon: Settings,

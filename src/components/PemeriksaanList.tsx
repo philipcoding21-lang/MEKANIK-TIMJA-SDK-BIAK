@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Pemeriksaan, MasterSatwas, Temuan } from "../types";
+import { Pemeriksaan, MasterSatwas, Temuan, Dokumen } from "../types";
 import { 
   Plus, 
   ChevronDown, 
@@ -15,7 +15,8 @@ import {
   X,
   Clock,
   Bell,
-  AlertTriangle
+  AlertTriangle,
+  FileText
 } from "lucide-react";
 
 interface PemeriksaanListProps {
@@ -23,6 +24,7 @@ interface PemeriksaanListProps {
   satwasList: MasterSatwas[];
   userRole: string;
   temuanList?: Temuan[];
+  documentList?: Dokumen[];
   onAddClick: () => void;
   onEditClick: (record: Pemeriksaan) => void;
   onDeleteClick: (id: string, name: string) => void;
@@ -35,6 +37,7 @@ export const PemeriksaanList: React.FC<PemeriksaanListProps> = ({
   satwasList,
   userRole,
   temuanList = [],
+  documentList = [],
   onAddClick,
   onEditClick,
   onDeleteClick,
@@ -66,6 +69,10 @@ export const PemeriksaanList: React.FC<PemeriksaanListProps> = ({
     const findingsForRecord = temuanList.filter((t) => t.pemeriksaan_id === r.id);
     const hasActiveFindings = findingsForRecord.some((t) => t.status_tindak_lanjut !== "Selesai");
     
+    // Check checklist documents not verified for over 7 days
+    const unverifiedDocs = documentList.filter(d => d.pemeriksaan_id === r.id && d.status === "Belum Verifikasi");
+    const hasUnverifiedDocsOver7Days = unverifiedDocs.length > 0 && daysElapsed > 7;
+    
     let docUrgency: "none" | "warning" | "danger" = "none";
     let findUrgency: "none" | "warning" | "danger" = "none";
     let docMessage = "";
@@ -94,6 +101,10 @@ export const PemeriksaanList: React.FC<PemeriksaanListProps> = ({
         findMessage = `Mendekati Batas Tindak Lanjut Temuan: Tersisa ${remaining} hari lagi untuk menindaklanjuti temuan.`;
       }
     }
+
+    if (hasUnverifiedDocsOver7Days) {
+      docMessage = docMessage || `Terdapat ${unverifiedDocs.length} dokumen checklist belum terverifikasi selama lebih dari 7 hari (Giat: ${daysElapsed} hari lalu).`;
+    }
     
     return {
       daysElapsed,
@@ -103,7 +114,10 @@ export const PemeriksaanList: React.FC<PemeriksaanListProps> = ({
       findUrgency,
       docMessage,
       findMessage,
-      isUrgent: docUrgency !== "none" || findUrgency !== "none",
+      hasUnverifiedDocsOver7Days,
+      unverifiedDocsCount: unverifiedDocs.length,
+      hasOverdueTindakLanjut: hasActiveFindings && daysElapsed >= 30,
+      isUrgent: docUrgency !== "none" || findUrgency !== "none" || hasUnverifiedDocsOver7Days,
     };
   };
 
@@ -309,17 +323,23 @@ export const PemeriksaanList: React.FC<PemeriksaanListProps> = ({
                   if (isExpanded) {
                     rowBgClass = "bg-slate-50/50";
                   } else if (urgency.isUrgent) {
-                    if (urgency.docUrgency === "danger" || urgency.findUrgency === "danger") {
+                    if (urgency.docUrgency === "danger" || urgency.findUrgency === "danger" || urgency.hasOverdueTindakLanjut) {
                       rowBgClass = "bg-rose-50/15 hover:bg-rose-50/25";
                     } else {
                       rowBgClass = "bg-amber-50/15 hover:bg-amber-50/25";
                     }
                   }
 
+                  const borderClass = urgency.isUrgent
+                    ? (urgency.docUrgency === "danger" || urgency.findUrgency === "danger" || urgency.hasOverdueTindakLanjut
+                      ? "border-l-4 border-rose-500" 
+                      : "border-l-4 border-amber-500")
+                    : "";
+
                   return (
                     <React.Fragment key={r.id}>
                       <tr className={`${rowBgClass} transition-colors cursor-pointer`} onClick={() => toggleRow(r.id)}>
-                        <td className={`px-4 text-center ${urgency.isUrgent ? (urgency.docUrgency === "danger" || urgency.findUrgency === "danger" ? "border-l-4 border-rose-500" : "border-l-4 border-amber-500") : ""}`} onClick={(e) => { e.stopPropagation(); toggleRow(r.id); }}>
+                        <td className={`px-4 text-center ${borderClass}`} onClick={(e) => { e.stopPropagation(); toggleRow(r.id); }}>
                           {isExpanded ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
                         </td>
                         <td className="px-5 py-4">
@@ -331,7 +351,17 @@ export const PemeriksaanList: React.FC<PemeriksaanListProps> = ({
                           {/* Urgency Badges */}
                           {urgency.isUrgent && (
                             <div className="mt-2 flex flex-wrap gap-1">
-                              {urgency.docUrgency === "danger" && (
+                              {urgency.hasOverdueTindakLanjut && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-50 border border-rose-200 text-rose-700 text-[9px] font-black tracking-wide uppercase">
+                                  <AlertTriangle className="w-2.5 h-2.5 shrink-0 text-rose-600 animate-bounce" /> Overdue Tindak Lanjut
+                                </span>
+                              )}
+                              {urgency.hasUnverifiedDocsOver7Days && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-700 text-[9px] font-black tracking-wide uppercase">
+                                  <FileText className="w-2.5 h-2.5 shrink-0 text-amber-600" /> Belum Verifikasi &gt;7 Hari
+                                </span>
+                              )}
+                              {urgency.docUrgency === "danger" && !urgency.hasUnverifiedDocsOver7Days && (
                                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-50 border border-rose-200 text-rose-700 text-[9px] font-black tracking-wide uppercase">
                                   <Clock className="w-2.5 h-2.5 shrink-0" /> Overdue Dokumen
                                 </span>
@@ -341,7 +371,7 @@ export const PemeriksaanList: React.FC<PemeriksaanListProps> = ({
                                   <Clock className="w-2.5 h-2.5 shrink-0" /> Limit Dokumen
                                 </span>
                               )}
-                              {urgency.findUrgency === "danger" && (
+                              {urgency.findUrgency === "danger" && !urgency.hasOverdueTindakLanjut && (
                                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-50 border border-rose-200 text-rose-700 text-[9px] font-black tracking-wide uppercase">
                                   <AlertCircle className="w-2.5 h-2.5 shrink-0" /> Overdue Temuan
                                 </span>

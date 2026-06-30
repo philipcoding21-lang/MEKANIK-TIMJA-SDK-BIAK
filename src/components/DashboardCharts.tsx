@@ -290,3 +290,357 @@ export const TrendTahunanChart: React.FC<LineChartProps> = ({ data }) => {
     </div>
   );
 };
+
+interface AnggaranSatwasStackedBarChartProps {
+  dashboardStats: any;
+  satwasList: { id: string; nama_satwas: string; wilayah: string }[];
+  selectedSatwas: string;
+  config?: any;
+}
+
+export const AnggaranSatwasStackedBarChart: React.FC<AnggaranSatwasStackedBarChartProps> = ({
+  dashboardStats,
+  satwasList,
+  selectedSatwas,
+  config,
+}) => {
+  const budgetShareMap: Record<string, number> = {
+    "Stasiun PSDKP Biak": 0.40,
+    "Satwas SDKP Manokwari": 0.20,
+    "Satwas SDKP Jayapura": 0.25,
+    "Satwas SDK Nabire": 0.15,
+  };
+
+  // Prepare data for each satwas in satwasList
+  const satwasData = satwasList.map((sat) => {
+    const hasSpecificConfig = config?.TARGET_SATWAS && config.TARGET_SATWAS[sat.nama_satwas] !== undefined;
+
+    let t1 = 0, t2 = 0, t3 = 0, t4 = 0;
+    let r1 = 0, r2 = 0, r3 = 0, r4 = 0;
+    let totalTarget = 0;
+    let totalRealisasi = 0;
+    let share = 0.20;
+
+    if (hasSpecificConfig) {
+      const satwasConfig = config.TARGET_SATWAS[sat.nama_satwas];
+      totalTarget = Number(satwasConfig.target) || 0;
+      totalRealisasi = Number(satwasConfig.realisasi) || 0;
+
+      // Quarterly proportions
+      const totalOverallTarget = config.TARGET_REALISASI || 1000000000;
+      const totalOverallReal = config.REALISASI_ANGGARAN || 825000000;
+
+      const q1TargetProp = (config.TARGET_Q1 ?? 250000000) / totalOverallTarget;
+      const q2TargetProp = (config.TARGET_Q2 ?? 250000000) / totalOverallTarget;
+      const q3TargetProp = (config.TARGET_Q3 ?? 250000000) / totalOverallTarget;
+      const q4TargetProp = (config.TARGET_Q4 ?? 250000000) / totalOverallTarget;
+
+      const q1RealProp = (config.REALISASI_Q1 ?? 220000000) / totalOverallReal;
+      const q2RealProp = (config.REALISASI_Q2 ?? 230000000) / totalOverallReal;
+      const q3RealProp = (config.REALISASI_Q3 ?? 200000000) / totalOverallReal;
+      const q4RealProp = (config.REALISASI_Q4 ?? 175000000) / totalOverallReal;
+
+      t1 = Math.round(totalTarget * q1TargetProp);
+      t2 = Math.round(totalTarget * q2TargetProp);
+      t3 = Math.round(totalTarget * q3TargetProp);
+      t4 = Math.round(totalTarget * q4TargetProp);
+
+      r1 = Math.round(totalRealisasi * q1RealProp);
+      r2 = Math.round(totalRealisasi * q2RealProp);
+      r3 = Math.round(totalRealisasi * q3RealProp);
+      r4 = Math.round(totalRealisasi * q4RealProp);
+    } else {
+      share = budgetShareMap[sat.nama_satwas] !== undefined ? budgetShareMap[sat.nama_satwas] : 0.20;
+
+      t1 = Math.round((dashboardStats?.targetQ1 ?? 250000000) * share);
+      t2 = Math.round((dashboardStats?.targetQ2 ?? 250000000) * share);
+      t3 = Math.round((dashboardStats?.targetQ3 ?? 250000000) * share);
+      t4 = Math.round((dashboardStats?.targetQ4 ?? 250000000) * share);
+
+      r1 = Math.round((dashboardStats?.realisasiQ1 ?? 220000000) * share);
+      r2 = Math.round((dashboardStats?.realisasiQ2 ?? 230000000) * share);
+      r3 = Math.round((dashboardStats?.realisasiQ3 ?? 200000000) * share);
+      r4 = Math.round((dashboardStats?.realisasiQ4 ?? 175000000) * share);
+
+      totalTarget = t1 + t2 + t3 + t4;
+      totalRealisasi = r1 + r2 + r3 + r4;
+    }
+
+    return {
+      id: sat.id,
+      nama_satwas: sat.nama_satwas,
+      wilayah: sat.wilayah,
+      share,
+      quarters: [
+        { label: "Q1", target: t1, realisasi: r1 },
+        { label: "Q2", target: t2, realisasi: r2 },
+        { label: "Q3", target: t3, realisasi: r3 },
+        { label: "Q4", target: t4, realisasi: r4 },
+      ],
+      totalTarget,
+      totalRealisasi,
+    };
+  });
+
+  // Find max total value to scale heights
+  const maxTotalVal = Math.max(...satwasData.map(d => Math.max(d.totalTarget, d.totalRealisasi)), 1);
+
+  // Hover state
+  const [hoverInfo, setHoverInfo] = useState<{
+    satwasId: string;
+    type: "target" | "realisasi";
+    qIdx: number;
+    targetVal: number;
+    realisasiVal: number;
+    qLabel: string;
+    satwasName: string;
+  } | null>(null);
+
+  // Styling helper for quarter colors
+  const quarterColors = {
+    target: [
+      "from-sky-300 to-sky-400 border-sky-400/30 text-sky-950",
+      "from-cyan-300 to-cyan-400 border-cyan-400/30 text-cyan-950",
+      "from-teal-300 to-teal-400 border-teal-400/30 text-teal-950",
+      "from-indigo-300 to-indigo-400 border-indigo-400/30 text-indigo-950",
+    ],
+    realisasi: [
+      "from-sky-600 to-blue-500 border-sky-700/30 text-white",
+      "from-cyan-600 to-sky-500 border-cyan-700/30 text-white",
+      "from-teal-600 to-emerald-500 border-teal-700/30 text-white",
+      "from-indigo-600 to-violet-500 border-indigo-700/30 text-white",
+    ],
+  };
+
+  const quarterLabels = ["Triwulan I (Q1)", "Triwulan II (Q2)", "Triwulan III (Q3)", "Triwulan IV (Q4)"];
+
+  // Helper to format currency to millions
+  const formatJuta = (val: number) => {
+    return `Rp ${(val / 1000000).toFixed(1)} Jt`;
+  };
+
+  const formatRupiahFull = (val: number) => {
+    return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(val);
+  };
+
+  // Generate grid values
+  const gridTicks = [1, 0.75, 0.5, 0.25, 0];
+
+  return (
+    <div id="satwas-stacked-bar-chart" className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-6">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-100 pb-4">
+        <div>
+          <h3 className="text-sm font-extrabold text-slate-800 flex items-center gap-2">
+            <span className="w-1.5 h-4 bg-emerald-500 rounded-xs inline-block" />
+            Grafik Stacked Bar: Perbandingan Anggaran Target vs Realisasi per Satwas
+          </h3>
+          <p className="text-[10px] text-slate-400 font-semibold mt-0.5">
+            Menganalisis porsi penyerapan (realisasi) dibanding pagu (target) secara triwulanan berdampingan untuk setiap Satwas wilayah kerja
+          </p>
+        </div>
+
+        {/* Legend */}
+        <div className="flex flex-wrap gap-x-4 gap-y-2 text-[10px] font-bold text-slate-500 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+          <div className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded bg-sky-500 inline-block" />
+            <span>Q1</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded bg-cyan-500 inline-block" />
+            <span>Q2</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded bg-teal-500 inline-block" />
+            <span>Q3</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded bg-indigo-500 inline-block" />
+            <span>Q4</span>
+          </div>
+          <div className="border-l border-slate-200 pl-3 flex gap-3">
+            <span className="font-semibold text-slate-400">Bar Kiri: <strong className="text-slate-600 font-extrabold">Target</strong></span>
+            <span className="font-semibold text-slate-400">Bar Kanan: <strong className="text-slate-600 font-extrabold">Realisasi</strong></span>
+          </div>
+        </div>
+      </div>
+
+      {/* Main chart area */}
+      <div className="relative h-96 w-full pt-4 flex">
+        {/* Y-Axis scale labels */}
+        <div className="w-16 flex flex-col justify-between text-[9px] font-bold text-slate-400 font-mono h-[80%] pr-2 border-r border-slate-100 select-none">
+          {gridTicks.map((tick, i) => (
+            <span key={i} className="text-right whitespace-nowrap">
+              {formatJuta(maxTotalVal * tick)}
+            </span>
+          ))}
+        </div>
+
+        {/* Bars Container */}
+        <div className="flex-1 h-[80%] relative flex justify-around items-end px-2 sm:px-6">
+          {/* Background Grid Lines */}
+          <div className="absolute inset-0 flex flex-col justify-between pointer-events-none pr-2">
+            {gridTicks.map((_, i) => (
+              <div key={i} className="w-full border-b border-slate-100 border-dashed" style={{ height: "0.5px" }} />
+            ))}
+          </div>
+
+          {/* Grouped Bars per Satwas */}
+          {satwasData.map((sat) => {
+            const isTargetSelected = selectedSatwas === "ALL" || selectedSatwas === sat.nama_satwas;
+            const targetHeightPercent = (sat.totalTarget / maxTotalVal) * 100;
+            const realisasiHeightPercent = (sat.totalRealisasi / maxTotalVal) * 100;
+
+            return (
+              <div
+                key={sat.id}
+                className={`flex flex-col items-center h-full justify-end relative transition-all duration-300 ${
+                  isTargetSelected ? "opacity-100 scale-100" : "opacity-35 scale-95"
+                }`}
+                style={{ width: "22%" }}
+              >
+                {/* Side-by-side Bars Container */}
+                <div className="flex items-end gap-1.5 sm:gap-3 w-full h-full justify-center">
+                  
+                  {/* TARGET STACKED BAR (Left Bar) */}
+                  <div
+                    className="w-7 sm:w-12 rounded-t-md overflow-hidden flex flex-col-reverse justify-end shadow-2xs hover:shadow-md border border-slate-200 bg-slate-50 transition-all duration-200"
+                    style={{ height: `${targetHeightPercent}%` }}
+                  >
+                    {sat.quarters.map((q, qIdx) => {
+                      const segmentHeightPercent = sat.totalTarget > 0 ? (q.target / sat.totalTarget) * 105 : 0;
+                      if (q.target === 0) return null;
+
+                      return (
+                        <motion.div
+                          key={`target-${qIdx}`}
+                          className={`w-full bg-gradient-to-t ${quarterColors.target[qIdx]} cursor-pointer relative group border-t border-b`}
+                          style={{ height: `${segmentHeightPercent}%` }}
+                          onMouseEnter={() => setHoverInfo({
+                            satwasId: sat.id,
+                            type: "target",
+                            qIdx,
+                            targetVal: q.target,
+                            realisasiVal: q.realisasi,
+                            qLabel: quarterLabels[qIdx],
+                            satwasName: sat.nama_satwas
+                          })}
+                          onMouseLeave={() => setHoverInfo(null)}
+                          whileHover={{ scaleX: 1.05 }}
+                          transition={{ duration: 0.1 }}
+                        />
+                      );
+                    })}
+                  </div>
+
+                  {/* REALISASI STACKED BAR (Right Bar) */}
+                  <div
+                    className="w-7 sm:w-12 rounded-t-md overflow-hidden flex flex-col-reverse justify-end shadow-2xs hover:shadow-md border border-slate-200 bg-slate-50 transition-all duration-200"
+                    style={{ height: `${realisasiHeightPercent}%` }}
+                  >
+                    {sat.quarters.map((q, qIdx) => {
+                      const segmentHeightPercent = sat.totalRealisasi > 0 ? (q.realisasi / sat.totalRealisasi) * 105 : 0;
+                      if (q.realisasi === 0) return null;
+
+                      return (
+                        <motion.div
+                          key={`realisasi-${qIdx}`}
+                          className={`w-full bg-gradient-to-t ${quarterColors.realisasi[qIdx]} cursor-pointer relative group border-t border-b`}
+                          style={{ height: `${segmentHeightPercent}%` }}
+                          onMouseEnter={() => setHoverInfo({
+                            satwasId: sat.id,
+                            type: "realisasi",
+                            qIdx,
+                            targetVal: q.target,
+                            realisasiVal: q.realisasi,
+                            qLabel: quarterLabels[qIdx],
+                            satwasName: sat.nama_satwas
+                          })}
+                          onMouseLeave={() => setHoverInfo(null)}
+                          whileHover={{ scaleX: 1.05 }}
+                          transition={{ duration: 0.1 }}
+                        />
+                      );
+                    })}
+                  </div>
+
+                </div>
+
+                {/* Percentage Labels above the bars */}
+                <div className="absolute -top-6 flex gap-4 text-[9px] font-black font-mono text-slate-500 select-none">
+                  <span title="Total Target" className="text-slate-450 font-bold">Pagu</span>
+                  <span title="Persentase Penyerapan" className="text-emerald-600">
+                    {sat.totalTarget > 0 ? Math.round((sat.totalRealisasi / sat.totalTarget) * 100) : 0}%
+                  </span>
+                </div>
+
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Float / Embedded Hover Tooltip */}
+        {hoverInfo && (
+          <motion.div
+            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-slate-900/95 text-white p-4 rounded-2xl shadow-xl border border-slate-850 z-30 max-w-sm w-[90%] backdrop-blur-xs flex flex-col gap-2"
+          >
+            <div className="flex justify-between items-center border-b border-slate-800 pb-1.5">
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">{hoverInfo.satwasName}</span>
+              <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">{hoverInfo.qLabel}</span>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-4 pt-1">
+              <div>
+                <span className="text-[9px] text-slate-450 font-semibold block">Target Anggaran:</span>
+                <span className="text-xs font-black font-mono text-sky-300">{formatRupiahFull(hoverInfo.targetVal)}</span>
+              </div>
+              <div>
+                <span className="text-[9px] text-slate-450 font-semibold block">Realisasi Penyerapan:</span>
+                <span className="text-xs font-black font-mono text-emerald-400">{formatRupiahFull(hoverInfo.realisasiVal)}</span>
+              </div>
+            </div>
+
+            <div className="flex justify-between items-center bg-slate-950/60 p-2 rounded-xl border border-slate-800 mt-1">
+              <span className="text-[9px] text-slate-400 font-bold">Capaian Realisasi Triwulan:</span>
+              <span className={`text-xs font-black font-mono ${
+                (hoverInfo.realisasiVal / hoverInfo.targetVal) * 100 >= 90
+                  ? "text-emerald-400"
+                  : (hoverInfo.realisasiVal / hoverInfo.targetVal) * 100 >= 75
+                  ? "text-sky-400"
+                  : (hoverInfo.realisasiVal / hoverInfo.targetVal) * 100 >= 50
+                  ? "text-blue-400"
+                  : "text-rose-450 animate-pulse"
+              }`}>
+                {hoverInfo.targetVal > 0 ? ((hoverInfo.realisasiVal / hoverInfo.targetVal) * 100).toFixed(1) : "0.0"}%
+              </span>
+            </div>
+          </motion.div>
+        )}
+      </div>
+
+      {/* X-Axis labels below the chart */}
+      <div className="flex justify-around pl-16 pt-2 border-t border-slate-100">
+        {satwasData.map((sat) => {
+          const isTargetSelected = selectedSatwas === "ALL" || selectedSatwas === sat.nama_satwas;
+          return (
+            <div
+              key={sat.id}
+              className={`text-center flex flex-col items-center select-none transition-all duration-300 ${
+                isTargetSelected ? "opacity-100 scale-100" : "opacity-35 scale-95"
+              }`}
+              style={{ width: "22%" }}
+            >
+              <span className="text-[10px] font-black text-slate-700 truncate max-w-full" title={sat.nama_satwas}>
+                {sat.nama_satwas}
+              </span>
+              <span className="text-[9px] font-bold text-slate-400 mt-0.5 font-mono">
+                Pagu: {formatJuta(sat.totalTarget)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};

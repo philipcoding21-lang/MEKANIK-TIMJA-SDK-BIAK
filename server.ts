@@ -55,6 +55,9 @@ async function readDB() {
       if (json.config.REALISASI_Q2 !== undefined) configEnv.REALISASI_Q2 = Number(json.config.REALISASI_Q2) || 0;
       if (json.config.REALISASI_Q3 !== undefined) configEnv.REALISASI_Q3 = Number(json.config.REALISASI_Q3) || 0;
       if (json.config.REALISASI_Q4 !== undefined) configEnv.REALISASI_Q4 = Number(json.config.REALISASI_Q4) || 0;
+      if (json.config.TARGET_SATWAS !== undefined) {
+        configEnv.TARGET_SATWAS = json.config.TARGET_SATWAS;
+      }
     }
     dbCache = json;
     return json;
@@ -93,6 +96,7 @@ async function writeDB(data: any) {
       REALISASI_Q2: Number(configEnv.REALISASI_Q2) || 0,
       REALISASI_Q3: Number(configEnv.REALISASI_Q3) || 0,
       REALISASI_Q4: Number(configEnv.REALISASI_Q4) || 0,
+      TARGET_SATWAS: configEnv.TARGET_SATWAS,
     };
     await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2), "utf-8");
   } catch (error) {
@@ -101,7 +105,7 @@ async function writeDB(data: any) {
 }
 
 // Memory configuration, allowing user to dynamically set GAS URL from the client
-let configEnv = {
+let configEnv: any = {
   DATA_PERSISTENCE_MODE: process.env.DATA_PERSISTENCE_MODE || "local",
   GAS_WEB_APP_URL: process.env.GAS_WEB_APP_URL || "",
   SPREADSHEET_ID: process.env.SPREADSHEET_ID || "",
@@ -116,6 +120,12 @@ let configEnv = {
   REALISASI_Q2: 230000000,
   REALISASI_Q3: 200000000,
   REALISASI_Q4: 175000000,
+  TARGET_SATWAS: {
+    "Stasiun PSDKP Biak": { pagu: 500000000, target: 400000000, realisasi: 330000000 },
+    "Satwas SDKP Manokwari": { pagu: 250000000, target: 200000000, realisasi: 165000000 },
+    "Satwas SDKP Jayapura": { pagu: 312500000, target: 250000000, realisasi: 206250000 },
+    "Satwas SDK Nabire": { pagu: 187500000, target: 150000000, realisasi: 123750000 }
+  }
 };
 
 // Generic Apps Script Proxy Handler
@@ -150,6 +160,9 @@ async function proxyToGAS(action: string, method: "GET" | "POST", body: any = nu
 
   const response = await fetch(finalUrl.toString(), options);
   if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error("Layanan Google Apps Script belum dikonfigurasi dengan benar (URL tidak ditemukan)");
+    }
     throw new Error(`GAS Request Failed: ${response.status} ${response.statusText}`);
   }
 
@@ -218,7 +231,8 @@ app.post("/api/config", async (req, res) => {
     REALISASI_Q1,
     REALISASI_Q2,
     REALISASI_Q3,
-    REALISASI_Q4
+    REALISASI_Q4,
+    TARGET_SATWAS
   } = req.body;
   if (DATA_PERSISTENCE_MODE) configEnv.DATA_PERSISTENCE_MODE = DATA_PERSISTENCE_MODE;
   if (GAS_WEB_APP_URL !== undefined) configEnv.GAS_WEB_APP_URL = GAS_WEB_APP_URL;
@@ -234,6 +248,7 @@ app.post("/api/config", async (req, res) => {
   if (REALISASI_Q2 !== undefined) configEnv.REALISASI_Q2 = Number(REALISASI_Q2) || 0;
   if (REALISASI_Q3 !== undefined) configEnv.REALISASI_Q3 = Number(REALISASI_Q3) || 0;
   if (REALISASI_Q4 !== undefined) configEnv.REALISASI_Q4 = Number(REALISASI_Q4) || 0;
+  if (TARGET_SATWAS !== undefined) configEnv.TARGET_SATWAS = TARGET_SATWAS;
 
   try {
     const db = await readDB();
@@ -252,6 +267,7 @@ app.post("/api/config", async (req, res) => {
       REALISASI_Q2: configEnv.REALISASI_Q2,
       REALISASI_Q3: configEnv.REALISASI_Q3,
       REALISASI_Q4: configEnv.REALISASI_Q4,
+      TARGET_SATWAS: configEnv.TARGET_SATWAS,
     };
     await writeDB(db);
     res.json({ success: true, message: "Konfigurasi berhasil disimpan dan dipersistensi!", data: configEnv });

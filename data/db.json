@@ -339,7 +339,7 @@
     }
   ],
   "config": {
-    "DATA_PERSISTENCE_MODE": "sheet",
+    "DATA_PERSISTENCE_MODE": "local",
     "GAS_WEB_APP_URL": "https://script.google.com/macros/s/AKfycbx7VQObqFp5-rY12PVgoJOxhzs2YXpVrAMbmRgDPfj22W6fhQUKXPsEFrrttyueDZ0PfQ/exec",
     "PAGU_ANGGARAN": 1250000000,
     "REALISASI_ANGGARAN": 825000000,

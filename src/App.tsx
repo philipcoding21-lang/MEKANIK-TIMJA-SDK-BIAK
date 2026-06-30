@@ -12,7 +12,8 @@ import {
   PemeriksaanBulananChart, 
   KetaatanPieChart, 
   NilaiSatwasChart, 
-  TrendTahunanChart 
+  TrendTahunanChart,
+  AnggaranSatwasStackedBarChart
 } from "./components/DashboardCharts";
 import { PemeriksaanList } from "./components/PemeriksaanList";
 import { PemeriksaanForm } from "./components/PemeriksaanForm";
@@ -70,6 +71,7 @@ export default function App() {
     REALISASI_Q2?: number;
     REALISASI_Q3?: number;
     REALISASI_Q4?: number;
+    TARGET_SATWAS?: Record<string, { pagu: number; target: number; realisasi: number }>;
   }>({ 
     DATA_PERSISTENCE_MODE: "local", 
     GAS_WEB_APP_URL: "", 
@@ -84,10 +86,18 @@ export default function App() {
     REALISASI_Q1: 220000000,
     REALISASI_Q2: 230000000,
     REALISASI_Q3: 200000000,
-    REALISASI_Q4: 175000000
+    REALISASI_Q4: 175000000,
+    TARGET_SATWAS: {
+      "Stasiun PSDKP Biak": { pagu: 500000000, target: 400000000, realisasi: 330000000 },
+      "Satwas SDKP Manokwari": { pagu: 250000000, target: 200000000, realisasi: 165000000 },
+      "Satwas SDKP Jayapura": { pagu: 312500000, target: 250000000, realisasi: 206250000 },
+      "Satwas SDKP Nabire": { pagu: 187500000, target: 150000000, realisasi: 123750000 }
+    }
   });
 
   const [loading, setLoading] = useState(false);
+  const [hasShownLoginAlerts, setHasShownLoginAlerts] = useState(false);
+  const [lastSyncedTime, setLastSyncedTime] = useState<string>("");
   const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(null);
 
   const [selectedDashboardSatwas, setSelectedDashboardSatwas] = useState<string>("ALL");
@@ -103,8 +113,32 @@ export default function App() {
   const filteredDashboardStats = useMemo(() => {
     if (!dashboardStats) return null;
     
-    // If "ALL" is selected, return the unfiltered dashboard stats
+    // If "ALL" is selected, return the dashboard stats with summed config if present
     if (selectedDashboardSatwas === "ALL") {
+      if (config?.TARGET_SATWAS) {
+        let sumPagu = 0;
+        let sumTarget = 0;
+        let sumRealisasi = 0;
+
+        // Sum up configured values
+        Object.entries(config.TARGET_SATWAS).forEach(([name, item]: [string, any]) => {
+          sumPagu += Number(item.pagu) || 0;
+          sumTarget += Number(item.target) || 0;
+          sumRealisasi += Number(item.realisasi) || 0;
+        });
+
+        if (sumPagu > 0) {
+          return {
+            ...dashboardStats,
+            paguAnggaran: sumPagu,
+            targetRealisasi: sumTarget,
+            realisasiAnggaran: sumRealisasi,
+            sisaAnggaran: sumPagu - sumRealisasi,
+            persentasePenyerapan: sumPagu > 0 ? Number(((sumRealisasi / sumPagu) * 100).toFixed(2)) : 0,
+            persentasePenyerapanTarget: sumTarget > 0 ? Number(((sumRealisasi / sumTarget) * 100).toFixed(2)) : 0,
+          };
+        }
+      }
       return dashboardStats;
     }
 
@@ -169,36 +203,74 @@ export default function App() {
       { tahun: "2026", rataRata: rataRataNilai || 82.8 },
     ];
 
-    // Recalculate Budget specifically for this Satwas based on the proportion
-    // Budget share map per satwas
-    const budgetShareMap: Record<string, number> = {
-      "Stasiun PSDKP Biak": 0.40,
-      "Satwas SDKP Manokwari": 0.20,
-      "Satwas SDKP Jayapura": 0.25,
-      "Satwas SDK Nabire": 0.15,
-    };
+    // Recalculate Budget specifically for this Satwas based on custom settings or proportion
+    const hasSpecificConfig = config?.TARGET_SATWAS && config.TARGET_SATWAS[selectedDashboardSatwas] !== undefined;
 
-    const share = budgetShareMap[selectedDashboardSatwas] !== undefined 
-      ? budgetShareMap[selectedDashboardSatwas] 
-      : 0.20; // Default/fallback share for newly added satwas
+    let paguVal = 0;
+    let targetVal = 0;
+    let realisasiVal = 0;
+    let targetQ1 = 0, targetQ2 = 0, targetQ3 = 0, targetQ4 = 0;
+    let realisasiQ1 = 0, realisasiQ2 = 0, realisasiQ3 = 0, realisasiQ4 = 0;
 
-    const paguVal = Math.round((dashboardStats.paguAnggaran || 1250000000) * share);
-    const targetVal = Math.round((dashboardStats.targetRealisasi || 1000000000) * share);
-    const realisasiVal = Math.round((dashboardStats.realisasiAnggaran || 825000000) * share);
+    if (hasSpecificConfig) {
+      const satwasConfig = config.TARGET_SATWAS[selectedDashboardSatwas];
+      paguVal = Number(satwasConfig.pagu) || 0;
+      targetVal = Number(satwasConfig.target) || 0;
+      realisasiVal = Number(satwasConfig.realisasi) || 0;
+
+      // Split quarterly values proportionally using the overall quarterly settings
+      const totalOverallTarget = config.TARGET_REALISASI || 1000000000;
+      const totalOverallReal = config.REALISASI_ANGGARAN || 825000000;
+
+      const q1TargetProp = (config.TARGET_Q1 ?? 250000000) / totalOverallTarget;
+      const q2TargetProp = (config.TARGET_Q2 ?? 250000000) / totalOverallTarget;
+      const q3TargetProp = (config.TARGET_Q3 ?? 250000000) / totalOverallTarget;
+      const q4TargetProp = (config.TARGET_Q4 ?? 250000000) / totalOverallTarget;
+
+      const q1RealProp = (config.REALISASI_Q1 ?? 220000000) / totalOverallReal;
+      const q2RealProp = (config.REALISASI_Q2 ?? 230000000) / totalOverallReal;
+      const q3RealProp = (config.REALISASI_Q3 ?? 200000000) / totalOverallReal;
+      const q4RealProp = (config.REALISASI_Q4 ?? 175000000) / totalOverallReal;
+
+      targetQ1 = Math.round(targetVal * q1TargetProp);
+      targetQ2 = Math.round(targetVal * q2TargetProp);
+      targetQ3 = Math.round(targetVal * q3TargetProp);
+      targetQ4 = Math.round(targetVal * q4TargetProp);
+
+      realisasiQ1 = Math.round(realisasiVal * q1RealProp);
+      realisasiQ2 = Math.round(realisasiVal * q2RealProp);
+      realisasiQ3 = Math.round(realisasiVal * q3RealProp);
+      realisasiQ4 = Math.round(realisasiVal * q4RealProp);
+    } else {
+      const budgetShareMap: Record<string, number> = {
+        "Stasiun PSDKP Biak": 0.40,
+        "Satwas SDKP Manokwari": 0.20,
+        "Satwas SDKP Jayapura": 0.25,
+        "Satwas SDK Nabire": 0.15,
+      };
+
+      const share = budgetShareMap[selectedDashboardSatwas] !== undefined 
+        ? budgetShareMap[selectedDashboardSatwas] 
+        : 0.20;
+
+      paguVal = Math.round((dashboardStats.paguAnggaran || 1250000000) * share);
+      targetVal = Math.round((dashboardStats.targetRealisasi || 1000000000) * share);
+      realisasiVal = Math.round((dashboardStats.realisasiAnggaran || 825000000) * share);
+
+      targetQ1 = Math.round((dashboardStats.targetQ1 ?? 250000000) * share);
+      targetQ2 = Math.round((dashboardStats.targetQ2 ?? 250000000) * share);
+      targetQ3 = Math.round((dashboardStats.targetQ3 ?? 250000000) * share);
+      targetQ4 = Math.round((dashboardStats.targetQ4 ?? 250000000) * share);
+
+      realisasiQ1 = Math.round((dashboardStats.realisasiQ1 ?? 220000000) * share);
+      realisasiQ2 = Math.round((dashboardStats.realisasiQ2 ?? 230000000) * share);
+      realisasiQ3 = Math.round((dashboardStats.realisasiQ3 ?? 200000000) * share);
+      realisasiQ4 = Math.round((dashboardStats.realisasiQ4 ?? 175000000) * share);
+    }
+
     const sisaVal = paguVal - realisasiVal;
-    
     const persentaseVal = paguVal > 0 ? Number(((realisasiVal / paguVal) * 100).toFixed(2)) : 0;
     const persentaseTargetVal = targetVal > 0 ? Number(((realisasiVal / targetVal) * 100).toFixed(2)) : 0;
-
-    const targetQ1 = Math.round((dashboardStats.targetQ1 ?? 250000000) * share);
-    const targetQ2 = Math.round((dashboardStats.targetQ2 ?? 250000000) * share);
-    const targetQ3 = Math.round((dashboardStats.targetQ3 ?? 250000000) * share);
-    const targetQ4 = Math.round((dashboardStats.targetQ4 ?? 250000000) * share);
-
-    const realisasiQ1 = Math.round((dashboardStats.realisasiQ1 ?? 220000000) * share);
-    const realisasiQ2 = Math.round((dashboardStats.realisasiQ2 ?? 230000000) * share);
-    const realisasiQ3 = Math.round((dashboardStats.realisasiQ3 ?? 200000000) * share);
-    const realisasiQ4 = Math.round((dashboardStats.realisasiQ4 ?? 175000000) * share);
 
     return {
       totalPemeriksaan,
@@ -226,7 +298,7 @@ export default function App() {
       realisasiQ3,
       realisasiQ4
     };
-  }, [selectedDashboardSatwas, dashboardStats, pemeriksaan]);
+  }, [selectedDashboardSatwas, dashboardStats, pemeriksaan, config]);
 
   // Form toggles & edit parameters
   const [showPemeriksaanForm, setShowPemeriksaanForm] = useState(false);
@@ -272,7 +344,7 @@ export default function App() {
 
       // Poll every 5 minutes to keep budget and examination data up to date
       const pollingInterval = setInterval(() => {
-        syncAllData();
+        syncAllData(false, true);
       }, 5 * 60 * 1000);
 
       return () => {
@@ -290,11 +362,52 @@ export default function App() {
     }
   };
 
-  const syncAllData = async (showNotification = false) => {
-    setLoading(true);
+  const triggerLoginUrgentAlerts = (pem: Pemeriksaan[], docs: Dokumen[], tem: Temuan[]) => {
+    const unverifiedPemsCount = pem.filter(p => docs.some(d => d.pemeriksaan_id === p.id && d.status === "Belum Verifikasi")).length;
+    
+    let approachingTindakLanjutCount = 0;
+    let overdueTindakLanjutCount = 0;
+
+    const currentDate = new Date();
+    currentDate.setHours(0, 0, 0, 0);
+
+    pem.forEach(p => {
+      const inspectDate = new Date(p.tanggal);
+      inspectDate.setHours(0, 0, 0, 0);
+      const diffTime = currentDate.getTime() - inspectDate.getTime();
+      const daysElapsed = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+      
+      const findingsForRecord = tem.filter((t) => t.pemeriksaan_id === p.id);
+      const hasActiveFindings = findingsForRecord.some((t) => t.status_tindak_lanjut !== "Selesai");
+      
+      if (hasActiveFindings) {
+        const daysRemaining = 30 - daysElapsed;
+        if (daysRemaining < 0) {
+          overdueTindakLanjutCount++;
+        } else if (daysRemaining <= 7) {
+          approachingTindakLanjutCount++;
+        }
+      }
+    });
+
+    if (unverifiedPemsCount > 0) {
+      warning(`Notifikasi: Terdapat ${unverifiedPemsCount} data pemeriksaan dengan berkas checklist yang belum diverifikasi!`, 8000);
+    }
+
+    if (approachingTindakLanjutCount > 0) {
+      warning(`Peringatan: Terdapat ${approachingTindakLanjutCount} data pemeriksaan mendekati batas waktu tindak lanjut (sisa ≤ 7 hari)!`, 8000);
+    }
+
+    if (overdueTindakLanjutCount > 0) {
+      error(`Perhatian: Terdapat ${overdueTindakLanjutCount} data pemeriksaan dengan tindak lanjut temuan yang MELEBIHI batas waktu (30 hari)!`, 8000);
+    }
+  };
+
+  const syncAllData = async (showNotification = false, isBackground = false) => {
+    if (!isBackground) setLoading(true);
     try {
       // Run API parallel loads
-      const [pem, docs, tem, sat, usrs, stats, nts] = await Promise.all([
+      const [pem, docs, tem, sat, usrs, stats, nts, cfg] = await Promise.all([
         api.getPemeriksaan(),
         api.getDokumen(),
         api.getTemuan(),
@@ -302,6 +415,7 @@ export default function App() {
         api.getUsers(),
         api.getDashboardStats(),
         api.getNotes(),
+        api.getConfig(),
       ]);
 
       setPemeriksaan(pem || []);
@@ -311,15 +425,27 @@ export default function App() {
       setUsersList(usrs || []);
       setDashboardStats(stats || null);
       setDashboardNotes(nts || []);
+      if (cfg) setConfig(cfg);
       
+      const now = new Date();
+      setLastSyncedTime(now.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+
       if (showNotification) {
         success("Sinkronisasi database berhasil! Menampilkan data terbaru.");
       }
+
+      // Check for unverified docs or approaching tindak lanjut deadline
+      if (!isBackground && !hasShownLoginAlerts) {
+        triggerLoginUrgentAlerts(pem || [], docs || [], tem || []);
+        setHasShownLoginAlerts(true);
+      }
     } catch (e: any) {
       console.error("Synchronizing failed:", e.message);
-      error(`Sinkronisasi database gagal: ${e.message}`);
+      if (!isBackground) {
+        error(`Sinkronisasi database gagal: ${e.message}`);
+      }
     } finally {
-      setLoading(false);
+      if (!isBackground) setLoading(false);
     }
   };
 
@@ -372,6 +498,7 @@ export default function App() {
   const handleLogout = async () => {
     setCurrentUser(null);
     setGoogleAccessToken(null);
+    setHasShownLoginAlerts(false);
     localStorage.removeItem("sdkp_user_session");
     setLoginUsername("");
     setLoginPassword("");
@@ -1083,6 +1210,7 @@ export default function App() {
           onSettingClick={() => setActiveTab("config")} 
           onSyncClick={() => syncAllData(true)} 
           isSyncing={loading} 
+          lastSyncedTime={lastSyncedTime}
         />
 
         {/* Loading overlay panel */}
@@ -1464,6 +1592,7 @@ export default function App() {
                   satwasList={satwasList}
                   userRole={currentUser.role}
                   temuanList={temuan}
+                  documentList={documents}
                   onAddClick={() => {
                     setEditingPemeriksaan(null);
                     setShowPemeriksaanForm(true);
@@ -1644,6 +1773,15 @@ export default function App() {
                         );
                       })}
                     </div>
+
+                    {dashboardStats && satwasList && (
+                      <AnggaranSatwasStackedBarChart
+                        dashboardStats={dashboardStats}
+                        satwasList={satwasList}
+                        selectedSatwas={selectedDashboardSatwas}
+                        config={config}
+                      />
+                    )}
                   </div>
                 </div>
               )
@@ -1699,15 +1837,6 @@ export default function App() {
             />
           )}
 
-          {/* TAB 5.6: ASISTEN SUARA AI (TEXT TO SPEECH) */}
-          {activeTab === "ai-assistant" && currentUser && (
-            <AIVoiceAssistant 
-              user={currentUser} 
-              activeTab={activeTab}
-              dashboardStats={filteredDashboardStats}
-            />
-          )}
-
           {/* TAB 6: USER REGISTRATION (ADMIN ONLY) */}
           {activeTab === "users" && currentUser.role === "Administrator" && (
             <UserManagement
@@ -1721,7 +1850,7 @@ export default function App() {
 
           {/* TAB 7: SYSTEM CONFIG API SETTINGS (ADMIN ONLY) */}
           {activeTab === "config" && currentUser.role === "Administrator" && (
-            <ConfigSettings config={config} onUpdateConfig={handleUpdateConfig} />
+            <ConfigSettings config={config} satwasList={satwasList} onUpdateConfig={handleUpdateConfig} />
           )}
 
           {/* TAB 8: AUDIT LOGS (ADMIN ONLY) */}
@@ -1761,15 +1890,7 @@ export default function App() {
         />
       )}
 
-      {/* GLOBAL FLOATING AI VOICE ASSISTANT */}
-      {currentUser && activeTab !== "ai-assistant" && (
-        <AIVoiceAssistant
-          user={currentUser}
-          activeTab={activeTab}
-          dashboardStats={filteredDashboardStats}
-          isFloatingOnly={true}
-        />
-      )}
+
 
     </div>
   );
