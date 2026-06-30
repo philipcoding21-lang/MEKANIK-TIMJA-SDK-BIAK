@@ -15,8 +15,13 @@ app.use(express.json());
 // Path to local JSON DB
 const DB_PATH = path.join(process.cwd(), "data", "db.json");
 
+let dbCache: any = null;
+
 // Helper to read local database
 async function readDB() {
+  if (dbCache) {
+    return dbCache;
+  }
   try {
     const data = await fs.readFile(DB_PATH, "utf-8");
     const json = JSON.parse(data);
@@ -51,10 +56,11 @@ async function readDB() {
       if (json.config.REALISASI_Q3 !== undefined) configEnv.REALISASI_Q3 = Number(json.config.REALISASI_Q3) || 0;
       if (json.config.REALISASI_Q4 !== undefined) configEnv.REALISASI_Q4 = Number(json.config.REALISASI_Q4) || 0;
     }
+    dbCache = json;
     return json;
   } catch (error) {
     console.error("Error reading local DB, initializing empty:", error);
-    return { 
+    dbCache = { 
       config: { DATA_PERSISTENCE_MODE: "local", GAS_WEB_APP_URL: "", SPREADSHEET_ID: "" },
       users: [], 
       pemeriksaan: [], 
@@ -63,11 +69,13 @@ async function readDB() {
       satwas: [],
       logs: [] 
     };
+    return dbCache;
   }
 }
 
 // Helper to write local database
 async function writeDB(data: any) {
+  dbCache = data;
   try {
     // Keep config synced inside the output
     data.config = {
@@ -1072,9 +1080,13 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server SDKP Biak running on http://localhost:${PORT}`);
-  });
+  if (!process.env.VERCEL) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server SDKP Biak running on http://localhost:${PORT}`);
+    });
+  }
 }
 
 startServer();
+
+export default app;

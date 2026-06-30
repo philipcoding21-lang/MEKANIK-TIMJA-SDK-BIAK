@@ -1,6 +1,23 @@
 import React, { useState } from "react";
 import { User, UserRole } from "../types";
-import { Plus, Edit2, Trash2, Key, UserCheck, Shield, CheckCircle } from "lucide-react";
+import { Plus, Edit2, Trash2, Key, UserCheck, Shield, CheckCircle, Eye, EyeOff } from "lucide-react";
+
+const maskName = (name: string, isSelf: boolean) => {
+  if (isSelf) return name;
+  if (!name) return "";
+  const words = name.trim().split(" ");
+  return words.map(w => {
+    if (w.length <= 2) return w[0] + "*";
+    return w[0] + "*".repeat(w.length - 2) + w[w.length - 1];
+  }).join(" ");
+};
+
+const maskUsername = (username: string, isSelf: boolean) => {
+  if (isSelf) return username;
+  if (!username) return "";
+  if (username.length <= 3) return username[0] + "*".repeat(username.length - 1);
+  return username.slice(0, 2) + "*".repeat(username.length - 4) + username.slice(-2);
+};
 
 interface UserManagementProps {
   users: User[];
@@ -128,10 +145,17 @@ export const UserManagement: React.FC<UserManagementProps> = ({
               {users.map((u) => (
                 <tr key={u.id} className="hover:bg-slate-50/50 transition-colors">
                   <td className="px-6 py-4">
-                    <div className="font-bold text-slate-900">{u.nama}</div>
+                    <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                      {maskName(u.nama, u.id === currentSessionUser.id)}
+                      {u.id !== currentSessionUser.id && (
+                        <span className="text-[9px] bg-slate-100 text-slate-500 px-1 py-0.5 rounded font-medium leading-none">Terproteksi</span>
+                      )}
+                    </div>
                     <div className="text-[10px] text-slate-400 font-mono mt-0.5">ID: {u.id}</div>
                   </td>
-                  <td className="px-6 py-4 font-mono text-xs">{u.username}</td>
+                  <td className="px-6 py-4 font-mono text-xs text-slate-500">
+                    {maskUsername(u.username, u.id === currentSessionUser.id)}
+                  </td>
                   <td className="px-6 py-4">
                     <span
                       className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${

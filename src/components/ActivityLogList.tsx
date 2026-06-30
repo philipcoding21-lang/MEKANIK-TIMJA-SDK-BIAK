@@ -17,7 +17,23 @@ import {
   AlertCircle
 } from "lucide-react";
 
+const maskUsername = (username: string, isSelf: boolean) => {
+  if (isSelf) return username;
+  if (!username) return "";
+  if (username.length <= 3) return username[0] + "*".repeat(username.length - 1);
+  return username.slice(0, 2) + "*".repeat(username.length - 4) + username.slice(-2);
+};
+
 export const ActivityLogList: React.FC = () => {
+  const [currentUser] = useState<any>(() => {
+    try {
+      const saved = localStorage.getItem("sdkp_user_session");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
   const [logs, setLogs] = useState<ActivityLog[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -253,15 +269,26 @@ export const ActivityLogList: React.FC = () => {
                         </div>
                       </td>
                       <td className="px-6 py-4.5">
-                        <div className="flex items-center gap-2">
-                          <div className="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 font-bold text-xs uppercase shrink-0 border border-slate-200">
-                            {log.username ? log.username.substring(0, 2) : "U"}
-                          </div>
-                          <div>
-                            <span className="block font-bold text-slate-900 leading-tight">{log.username}</span>
-                            <span className="block text-[10px] text-slate-400 font-bold mt-0.5 leading-none">{log.userRole}</span>
-                          </div>
-                        </div>
+                        {(() => {
+                          const isSelf = currentUser && (log.username === currentUser.username || log.username === currentUser.nama);
+                          const dispName = maskUsername(log.username, !!isSelf);
+                          return (
+                            <div className="flex items-center gap-2">
+                              <div className="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 font-bold text-xs uppercase shrink-0 border border-slate-200">
+                                {dispName ? dispName.substring(0, 2) : "U"}
+                              </div>
+                              <div>
+                                <span className="block font-bold text-slate-900 leading-tight flex items-center gap-1">
+                                  {dispName}
+                                  {!isSelf && (
+                                    <span className="text-[8px] bg-slate-100 text-slate-500 px-1 py-0.5 rounded font-medium">Terproteksi</span>
+                                  )}
+                                </span>
+                                <span className="block text-[10px] text-slate-400 font-bold mt-0.5 leading-none">{log.userRole}</span>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-6 py-4.5 whitespace-nowrap">
                         <span className={`inline-flex items-center px-2 py-1 rounded-lg border text-[10px] font-black tracking-wide uppercase ${getMenuColor(log.menu)}`}>
