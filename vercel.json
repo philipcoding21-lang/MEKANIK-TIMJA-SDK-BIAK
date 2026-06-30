@@ -3,11 +3,11 @@
   "framework": "vite",
   "rewrites": [
     {
-      "source": "/api/(.*)",
-      "destination": "/api"
+      "source": "/api/:path*",
+      "destination": "/api/index.ts"
     },
     {
-      "source": "/(.*)",
+      "source": "/((?!api).*)" ,
       "destination": "/index.html"
     }
   ],
