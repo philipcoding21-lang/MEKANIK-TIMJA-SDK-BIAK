@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs/promises";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
+import { GoogleGenAI, Modality } from "@google/genai";
 
 dotenv.config();
 
@@ -274,7 +275,7 @@ app.post("/api/auth/login", async (req, res) => {
           }
         }
       } catch (e: any) {
-        console.warn("GAS Auth failed, falling back to local DB auth:", e.message);
+        console.log(`GAS Sync info: Using local DB auth (Reason: ${e.message})`);
       }
     }
 
@@ -304,7 +305,7 @@ app.get("/api/users", async (req, res) => {
       const data = await proxyToGAS("getUsers", "GET");
       return res.json({ success: true, data });
     } catch (e: any) {
-      console.warn("GAS getUsers failed, falling back to local DB:", e.message);
+      console.log(`GAS Sync info: Using local DB for users (Reason: ${e.message})`);
       const db = await readDB();
       return res.json({ success: true, data: db.users, warning: e.message });
     }
@@ -378,7 +379,7 @@ app.get("/api/pemeriksaan", async (req, res) => {
       const data = await proxyToGAS("getPemeriksaan", "GET");
       return res.json({ success: true, data });
     } catch (e: any) {
-      console.warn("GAS getPemeriksaan failed, falling back to local DB:", e.message);
+      console.log(`GAS Sync info: Using local DB for pemeriksaan (Reason: ${e.message})`);
       const db = await readDB();
       return res.json({ success: true, data: db.pemeriksaan, warning: e.message });
     }
@@ -461,7 +462,7 @@ app.get("/api/dokumen", async (req, res) => {
       const data = await proxyToGAS("getDokumen", "GET");
       return res.json({ success: true, data });
     } catch (e: any) {
-      console.warn("GAS getDokumen failed, falling back to local DB:", e.message);
+      console.log(`GAS Sync info: Using local DB for dokumen (Reason: ${e.message})`);
       const db = await readDB();
       return res.json({ success: true, data: db.dokumen, warning: e.message });
     }
@@ -543,7 +544,7 @@ app.get("/api/temuan", async (req, res) => {
       const data = await proxyToGAS("getTemuan", "GET");
       return res.json({ success: true, data });
     } catch (e: any) {
-      console.warn("GAS getTemuan failed, falling back to local DB:", e.message);
+      console.log(`GAS Sync info: Using local DB for temuan (Reason: ${e.message})`);
       const db = await readDB();
       return res.json({ success: true, data: db.temuan, warning: e.message });
     }
@@ -639,7 +640,7 @@ app.get("/api/satwas", async (req, res) => {
       const data = await proxyToGAS("getSatwas", "GET");
       return res.json({ success: true, data });
     } catch (e: any) {
-      console.warn("GAS getSatwas failed, falling back to local DB:", e.message);
+      console.log(`GAS Sync info: Using local DB for satwas (Reason: ${e.message})`);
       const db = await readDB();
       return res.json({ success: true, data: db.satwas, warning: e.message });
     }
@@ -662,7 +663,7 @@ app.get("/api/dashboard", async (req, res) => {
         return res.json({ success: true, data });
       }
     } catch (e: any) {
-      console.warn("GAS getDashboard direct call failed, attempting local calculation from live sheet data:", e.message);
+      console.log(`GAS Sync info: Falling back to local calculation from live sheet data (Reason: ${e.message})`);
     }
 
     try {
@@ -957,6 +958,92 @@ app.delete("/api/google-forms/:id", async (req, res) => {
     res.json({ success: true, message: "Formulir berhasil dihapus" });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ==========================================
+// AI GEMINI & TEXT-TO-SPEECH SERVICE
+// ==========================================
+let aiClient: any = null;
+function getAIClient() {
+  if (!aiClient) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY environment variable is missing. Silakan tambahkan kunci API Anda di Settings > Secrets.");
+    }
+    aiClient = new GoogleGenAI({
+      apiKey: apiKey,
+      httpOptions: {
+        headers: {
+          "User-Agent": "aistudio-build",
+        }
+      }
+    });
+  }
+  return aiClient;
+}
+
+// 1. Text Generation Endpoint (to generate reports, briefings, or custom announcements)
+app.post("/api/ai/generate", async (req, res) => {
+  try {
+    const { prompt, contextSystem } = req.body;
+    if (!prompt) {
+      return res.status(400).json({ success: false, message: "Prompt tidak boleh kosong" });
+    }
+
+    const ai = getAIClient();
+    const systemInstruction = contextSystem || "Anda adalah asisten AI profesional untuk Tim Kerja Sumber Daya Kelautan (Timja SDK) Stasiun PSDKP Biak. Jawablah dalam Bahasa Indonesia yang formal, ringkas, santun, dan informatif.";
+    
+    const response = await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: prompt,
+      config: {
+        systemInstruction,
+        temperature: 0.7,
+      },
+    });
+
+    const text = response.text || "";
+    res.json({ success: true, data: { text } });
+  } catch (error: any) {
+    console.error("Error generating content:", error);
+    res.status(500).json({ success: false, message: error.message || "Gagal menghasilkan teks menggunakan AI" });
+  }
+});
+
+// 2. Text to Speech Endpoint (using gemini-3.1-flash-tts-preview)
+app.post("/api/ai/tts", async (req, res) => {
+  try {
+    const { text, voiceName } = req.body;
+    if (!text) {
+      return res.status(400).json({ success: false, message: "Teks tidak boleh kosong untuk dibacakan" });
+    }
+
+    const ai = getAIClient();
+    const voice = voiceName || "Kore"; // Puck, Charon, Kore, Fenrir, Zephyr
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.1-flash-tts-preview",
+      contents: [{ parts: [{ text }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName: voice },
+          },
+        },
+      },
+    });
+
+    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    if (!base64Audio) {
+      throw new Error("Tidak ada data audio yang diterima dari model TTS.");
+    }
+
+    res.json({ success: true, data: { audio: base64Audio } });
+  } catch (error: any) {
+    console.error("Error generating speech:", error);
+    res.status(500).json({ success: false, message: error.message || "Gagal mengubah teks menjadi suara (TTS)" });
   }
 });
 

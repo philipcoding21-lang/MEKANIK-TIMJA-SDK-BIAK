@@ -12,7 +12,8 @@ import {
   Menu,
   X,
   History,
-  Chrome
+  Chrome,
+  Volume2
 } from "lucide-react";
 import { User, UserRole } from "../types";
 import kepolisianKhususLogo from "../assets/images/polsus_badge_real_1782639227590.jpg";
@@ -75,6 +76,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, user,
       id: "workspace",
       label: "Google Workspace API",
       icon: Chrome,
+      roles: ["Administrator", "Kepala Stasiun", "Verifikator", "Satwas"],
+    },
+    {
+      id: "ai-assistant",
+      label: "Asisten Suara AI (TTS)",
+      icon: Volume2,
       roles: ["Administrator", "Kepala Stasiun", "Verifikator", "Satwas"],
     },
     {

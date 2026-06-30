@@ -371,7 +371,7 @@ export const api = {
         try {
           return await googleSheetsApi.getRows(token, cachedConfig!.SPREADSHEET_ID, "Dokumen") as Dokumen[];
         } catch (err: any) {
-          console.warn("Direct-sheet getDokumen failed, falling back to local DB:", err.message);
+          console.log(`Direct-sheet Sync info: using local DB for getDokumen fallback (Reason: ${err.message})`);
         }
       }
     }
@@ -434,7 +434,7 @@ export const api = {
         try {
           return await googleSheetsApi.getRows(token, cachedConfig!.SPREADSHEET_ID, "Temuan") as Temuan[];
         } catch (err: any) {
-          console.warn("Direct-sheet getTemuan failed, falling back to local DB:", err.message);
+          console.log(`Direct-sheet Sync info: using local DB for getTemuan fallback (Reason: ${err.message})`);
         }
       }
     }
@@ -617,5 +617,22 @@ export const api = {
     return request<any>(`${BASE_URL}/google-forms/${id}`, {
       method: "DELETE",
     });
+  },
+
+  // AI Gemini & Text-to-Speech Assistant
+  aiGenerateText: async (prompt: string, contextSystem?: string): Promise<string> => {
+    return request<{ text: string }>(`${BASE_URL}/ai/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, contextSystem }),
+    }).then(data => data.text);
+  },
+
+  aiTextToSpeech: async (text: string, voiceName: string = "Kore"): Promise<string> => {
+    return request<{ audio: string }>(`${BASE_URL}/ai/tts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, voiceName }),
+    }).then(data => data.audio);
   },
 };

@@ -444,7 +444,7 @@ export const ConfigSettings: React.FC<ConfigSettingsProps> = ({ config, onUpdate
                           Memuat spreadsheet dari Google Drive...
                         </div>
                       ) : mySpreadsheets.length === 0 ? (
-                        <div className="text-[10.5px] text-slate-405 italic py-1">Tidak ditemukan spreadsheet Google di Drive Anda. Silakan klik tombol "Buat Sheet Baru" di atas.</div>
+                        <div className="text-[10.5px] text-slate-400 italic py-1">Tidak ditemukan spreadsheet Google di Drive Anda. Silakan klik tombol "Buat Sheet Baru" di atas.</div>
                       ) : (
                         <div className="max-h-36 overflow-y-auto border border-slate-200 bg-white rounded-xl divide-y divide-slate-100">
                           {mySpreadsheets.map((s) => (
@@ -784,7 +784,7 @@ export const ConfigSettings: React.FC<ConfigSettingsProps> = ({ config, onUpdate
               {appsScriptCode || "Memuat kode..."}
             </div>
           ) : (
-            <div className="p-4 text-center text-xs text-slate-405 font-medium">
+            <div className="p-4 text-center text-xs text-slate-400 font-medium">
               Sembunyikan kode panjang. Anda tetap dapat langsung menekan tombol <strong className="text-white">"Salin Kode Apps Script"</strong> di atas untuk menyalin seluruh baris kode.
             </div>
           )}

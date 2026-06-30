@@ -24,13 +24,14 @@ import { UserManagement } from "./components/UserManagement";
 import { ConfigSettings } from "./components/ConfigSettings";
 import { ActivityLogList } from "./components/ActivityLogList";
 import { GoogleWorkspaceManager } from "./components/GoogleWorkspaceManager";
+import { AIVoiceAssistant } from "./components/AIVoiceAssistant";
 import { useToast } from "./components/Toast";
 
 // Direct Sheets auth service
 import { initAuth, googleSignIn, googleLogout } from "./lib/firebaseAuth";
 
 // Lucide icon helper for login
-import { Anchor, Lock, User as UserIcon, LogIn, ExternalLink, RefreshCw, Chrome, ClipboardCheck, Wallet, AlertTriangle, Download, Pin, Plus, Trash2, Edit3, Check, X, StickyNote } from "lucide-react";
+import { Anchor, Lock, User as UserIcon, LogIn, ExternalLink, RefreshCw, Chrome, ClipboardCheck, Wallet, AlertTriangle, Download, Pin, Plus, Trash2, Edit3, Check, X, StickyNote, Volume2, Sparkles, Play, Square, Loader2 } from "lucide-react";
 
 export default function App() {
   const { success, error, info, warning } = useToast();
@@ -1698,6 +1699,15 @@ export default function App() {
             />
           )}
 
+          {/* TAB 5.6: ASISTEN SUARA AI (TEXT TO SPEECH) */}
+          {activeTab === "ai-assistant" && currentUser && (
+            <AIVoiceAssistant 
+              user={currentUser} 
+              activeTab={activeTab}
+              dashboardStats={filteredDashboardStats}
+            />
+          )}
+
           {/* TAB 6: USER REGISTRATION (ADMIN ONLY) */}
           {activeTab === "users" && currentUser.role === "Administrator" && (
             <UserManagement
@@ -1748,6 +1758,16 @@ export default function App() {
             setEditingTemuan(null);
             setPreSelectedPemeriksaanId(undefined);
           }}
+        />
+      )}
+
+      {/* GLOBAL FLOATING AI VOICE ASSISTANT */}
+      {currentUser && activeTab !== "ai-assistant" && (
+        <AIVoiceAssistant
+          user={currentUser}
+          activeTab={activeTab}
+          dashboardStats={filteredDashboardStats}
+          isFloatingOnly={true}
         />
       )}
 

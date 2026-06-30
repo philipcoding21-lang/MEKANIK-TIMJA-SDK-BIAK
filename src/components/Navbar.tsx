@@ -26,6 +26,8 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, config, onSettingClic
         return "Manajemen User & Hak Akses Kontrol";
       case "workspace":
         return "Google Workspace REST API Integrasi (Calendar, Forms, Keep)";
+      case "ai-assistant":
+        return "Asisten Suara AI (AI Voice Assistant) - Text-to-Speech";
       case "config":
         return "Integrasi Google Spreadsheet & REST API";
       default:
