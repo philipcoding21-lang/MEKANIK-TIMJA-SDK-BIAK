@@ -22,11 +22,57 @@ async function readDB() {
   if (dbCache) {
     return dbCache;
   }
+  const defaultUsers = [
+    {
+      "id": "u1",
+      "nama": "Administrator SDKP Biak",
+      "username": "admin",
+      "password": "admin123",
+      "role": "Administrator",
+      "status": "Aktif"
+    },
+    {
+      "id": "u2",
+      "nama": "Ariyanto Basuki (Kepala Stasiun)",
+      "username": "kepala",
+      "password": "kepala123",
+      "role": "Kepala Stasiun",
+      "status": "Aktif"
+    },
+    {
+      "id": "u3",
+      "nama": "Hendra Wijaya (Verifikator)",
+      "username": "verifikator",
+      "password": "veri123",
+      "role": "Verifikator",
+      "status": "Aktif"
+    },
+    {
+      "id": "u4",
+      "nama": "Petugas Satwas Manokwari",
+      "username": "manokwari",
+      "password": "satwas123",
+      "role": "Satwas",
+      "status": "Aktif"
+    },
+    {
+      "id": "u5",
+      "nama": "Petugas Satwas Jayapura",
+      "username": "jayapura",
+      "password": "satwas123",
+      "role": "Satwas",
+      "status": "Aktif"
+    }
+  ];
+
   try {
     const data = await fs.readFile(DB_PATH, "utf-8");
     const json = JSON.parse(data);
     if (!json.logs) {
       json.logs = [];
+    }
+    if (!json.users || json.users.length === 0) {
+      json.users = defaultUsers;
     }
     if (json.config) {
       if (json.config.DATA_PERSISTENCE_MODE) {
@@ -62,10 +108,10 @@ async function readDB() {
     dbCache = json;
     return json;
   } catch (error) {
-    console.error("Error reading local DB, initializing empty:", error);
+    console.error("Error reading local DB, initializing empty with default users fallback:", error);
     dbCache = { 
       config: { DATA_PERSISTENCE_MODE: "local", GAS_WEB_APP_URL: "", SPREADSHEET_ID: "" },
-      users: [], 
+      users: defaultUsers, 
       pemeriksaan: [], 
       dokumen: [], 
       temuan: [], 
