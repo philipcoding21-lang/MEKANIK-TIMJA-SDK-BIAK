@@ -1045,7 +1045,8 @@ function getAIClient() {
       httpOptions: {
         headers: {
           "User-Agent": "aistudio-build",
-        }
+        },
+        timeout: 180000,
       }
     });
   }
