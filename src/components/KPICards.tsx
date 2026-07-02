@@ -1,4 +1,5 @@
 import React from "react";
+import { motion } from "motion/react";
 import { 
   FileCheck, 
   ThumbsUp, 
@@ -151,12 +152,15 @@ export const KPICards: React.FC<KPICardsProps> = ({ stats }) => {
           Indikator Kinerja Utama & Pengawasan
         </h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {perfCards.map((card) => {
+          {perfCards.map((card, index) => {
             const IconComponent = card.icon;
             return (
-              <div
+              <motion.div
                 id={card.id}
-                key={card.title}
+                key={`${card.id}-${stats.totalPemeriksaan}-${stats.totalTaat}-${stats.rataRataNilai}`}
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4, delay: index * 0.05, ease: "easeOut" }}
                 className={`rounded-2xl border bg-gradient-to-br ${card.color} p-5 shadow-xs transition-all hover:scale-[1.01] hover:shadow-sm flex items-center justify-between gap-4`}
               >
                 <div className="flex-1 min-w-0">
@@ -167,7 +171,7 @@ export const KPICards: React.FC<KPICardsProps> = ({ stats }) => {
                 <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${card.iconColor}`}>
                   <IconComponent className="w-5 h-5" />
                 </div>
-              </div>
+              </motion.div>
             );
           })}
         </div>
@@ -180,12 +184,15 @@ export const KPICards: React.FC<KPICardsProps> = ({ stats }) => {
           Alokasi & Penyerapan Anggaran Kerja Timja
         </h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {budgetCards.map((card) => {
+          {budgetCards.map((card, index) => {
             const IconComponent = card.icon;
             return (
-              <div
+              <motion.div
                 id={card.id}
-                key={card.title}
+                key={`${card.id}-${stats.paguAnggaran}-${stats.realisasiAnggaran}-${stats.persentasePenyerapan}`}
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4, delay: index * 0.05, ease: "easeOut" }}
                 className={`rounded-2xl border bg-gradient-to-br ${card.color} p-5 shadow-xs transition-all hover:scale-[1.01] hover:shadow-sm flex items-center justify-between gap-4`}
               >
                 <div className="flex-1 min-w-0">
@@ -196,7 +203,7 @@ export const KPICards: React.FC<KPICardsProps> = ({ stats }) => {
                 <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${card.iconColor}`}>
                   <IconComponent className="w-5 h-5" />
                 </div>
-              </div>
+              </motion.div>
             );
           })}
         </div>
