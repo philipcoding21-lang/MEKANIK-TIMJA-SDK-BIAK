@@ -12,7 +12,9 @@ import {
   Undo2, 
   FileAudio,
   Activity,
-  Settings
+  Settings,
+  Check,
+  X
 } from "lucide-react";
 import { User } from "../types";
 import { api } from "../lib/api";
@@ -35,13 +37,152 @@ export const AIVoiceAssistant: React.FC<AIVoiceAssistantProps> = ({
   const { success, error, warning, info } = useToast();
   
   // Tab/Mode State
-  const [activeMode, setActiveMode] = useState<"direct" | "ai">("direct");
+  const [activeMode, setActiveMode] = useState<"direct" | "ai" | "stt">("direct");
+  
+  // Floating Visibility State (Hidden/collapsed by default)
+  const [isFloatingOpen, setIsFloatingOpen] = useState<boolean>(() => {
+    return localStorage.getItem("ai_assistant_floating_open") === "true";
+  });
   
   // TTS State
   const [textToRead, setTextToRead] = useState<string>("");
   const [selectedVoice, setSelectedVoice] = useState<string>("Kore");
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isSynthesizing, setIsSynthesizing] = useState<boolean>(false);
+
+  // Speech-to-Text (STT) state
+  const [isRecording, setIsRecording] = useState<boolean>(false);
+  const [transcription, setTranscription] = useState<string>("");
+  const [sttTarget, setSttTarget] = useState<string>("catatan");
+  const recognitionRef = useRef<any>(null);
+
+  const startSpeechToText = () => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      error("Browser Anda tidak mendukung Pengenalan Suara (Speech-to-Text) Web API.");
+      return;
+    }
+
+    try {
+      stopAudio(); // Stop any TTS playing
+      
+      const rec = new SpeechRecognition();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = "id-ID";
+
+      rec.onstart = () => {
+        setIsRecording(true);
+        info("Mikrofon aktif. Silakan mulai berbicara...");
+      };
+
+      rec.onerror = (e: any) => {
+        console.error("Kesalahan Speech Recognition:", e);
+        if (e.error === "no-speech") {
+          warning("Tidak ada suara yang terdeteksi. Silakan coba lagi.");
+        } else if (e.error === "not-allowed") {
+          error("Izin mikrofon ditolak. Aktifkan izin mikrofon di browser Anda.");
+        } else {
+          error(`Kesalahan perekaman: ${e.error}`);
+        }
+        setIsRecording(false);
+      };
+
+      rec.onend = () => {
+        setIsRecording(false);
+      };
+
+      rec.onresult = (event: any) => {
+        let resultText = "";
+        for (let i = 0; i < event.results.length; i++) {
+          resultText += event.results[i][0].transcript;
+        }
+        setTranscription(resultText);
+      };
+
+      recognitionRef.current = rec;
+      rec.start();
+    } catch (err: any) {
+      console.error("Gagal memulai perekaman:", err);
+      error(`Gagal memulai perekaman: ${err.message}`);
+      setIsRecording(false);
+    }
+  };
+
+  const stopSpeechToText = () => {
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch (e) {
+        // Ignore
+      }
+      recognitionRef.current = null;
+    }
+    setIsRecording(false);
+    success("Perekaman dihentikan.");
+  };
+
+  const clearTranscription = () => {
+    setTranscription("");
+    info("Teks dikte dibersihkan.");
+  };
+
+  const handleInjectText = () => {
+    if (!transcription.trim()) {
+      warning("Belum ada teks hasil dikte untuk dimasukkan!");
+      return;
+    }
+
+    let elementId = "";
+    let fieldLabel = "";
+
+    switch (sttTarget) {
+      case "catatan":
+        elementId = "newNoteContent";
+        fieldLabel = "Catatan / Instruksi Harian";
+        break;
+      case "temuan_lapangan":
+        elementId = "uraianTemuan";
+        fieldLabel = "Deskripsi Temuan (Form Temuan)";
+        break;
+      case "pemeriksaan_temuan":
+        elementId = "pemeriksaanTemuan";
+        fieldLabel = "Uraian Temuan BA (Form Pemeriksaan)";
+        break;
+      case "pemeriksaan_rekomendasi":
+        elementId = "pemeriksaanRekomendasi";
+        fieldLabel = "Rekomendasi Tindakan (Form Pemeriksaan)";
+        break;
+      default:
+        break;
+    }
+
+    if (!elementId) return;
+
+    const element = document.getElementById(elementId) as HTMLTextAreaElement | HTMLInputElement;
+    if (element) {
+      // Get the existing value
+      const existingVal = element.value;
+      const newVal = existingVal 
+        ? `${existingVal} ${transcription.trim()}`
+        : transcription.trim();
+
+      // Set value and trigger React's synthetic events
+      element.value = newVal;
+      
+      // Dispatch events to trigger React's onChange handlers
+      const inputEvent = new Event("input", { bubbles: true });
+      const changeEvent = new Event("change", { bubbles: true });
+      element.dispatchEvent(inputEvent);
+      element.dispatchEvent(changeEvent);
+
+      success(`Berhasil memasukkan teks ke field "${fieldLabel}"!`);
+    } else {
+      warning(
+        `Formulir target dengan field "${fieldLabel}" tidak ditemukan terbuka di layar. Pastikan Anda membuka formulir tersebut terlebih dahulu!`
+      );
+    }
+  };
 
   const getStorageKey = () => `ai_voice_autoplay_${user?.id || user?.username || "default"}`;
 
@@ -353,112 +494,211 @@ export const AIVoiceAssistant: React.FC<AIVoiceAssistantProps> = ({
 
   if (isFloatingOnly) {
     return (
-      <AnimatePresence>
-        <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3 font-sans">
-          {/* SPEECH BUBBLE OVERLAY */}
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9, y: 10 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.9, y: 10 }}
-            className="bg-slate-900/95 backdrop-blur-md text-white p-4 rounded-3xl shadow-xl border border-slate-700/60 max-w-xs flex flex-col gap-2.5"
-          >
-            <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-1.5">
-              <span className="text-[9px] font-black tracking-widest text-cyan-400 uppercase flex items-center gap-1">
-                <Sparkles className="w-2.5 h-2.5" />
-                Asisten Suara Aktif
-              </span>
-              <span className="text-[9px] font-extrabold text-slate-400 bg-white/10 px-2 py-0.5 rounded-md">
-                {getTabFriendlyName(activeTab)}
-              </span>
-            </div>
-            
-            <p className="text-[10px] text-slate-300 font-semibold leading-relaxed">
-              Halaman terdeteksi. Ingin asisten membacakan ringkasan data saat ini secara langsung?
-            </p>
-
-            {/* AUTOPLAY TOGGLE CONTROLLER */}
-            <div className="flex items-center justify-between bg-white/5 p-2 rounded-xl border border-white/5">
-              <span className="text-[9.5px] text-slate-300 font-bold">Baca Otomatis saat ganti tab</span>
-              <button
-                type="button"
-                onClick={toggleAutoPlay}
-                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                  isAutoPlay ? "bg-emerald-500" : "bg-slate-600"
-                }`}
-              >
-                <span
-                  className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out ${
-                    isAutoPlay ? "translate-x-4" : "translate-x-0"
-                  }`}
-                />
-              </button>
-            </div>
-
-            {/* ACTIONS */}
-            <div className="flex gap-2 justify-end pt-1">
-              {isPlaying && (
-                <button
-                  onClick={stopAudio}
-                  className="px-2.5 py-1.5 bg-rose-600 hover:bg-rose-500 rounded-lg text-white font-extrabold text-[9.5px] transition-all flex items-center gap-1 cursor-pointer"
-                >
-                  <Square className="w-2.5 h-2.5 fill-white" />
-                  Stop
-                </button>
-              )}
-              
-              <button
-                disabled={isSynthesizing}
-                onClick={() => handleSynthesizeAndPlayWithText(textToRead || getTabSummaryText(activeTab, dashboardStats))}
-                className={`px-3 py-1.5 text-white font-extrabold text-[9.5px] rounded-lg transition-all flex items-center gap-1 cursor-pointer ${
-                  isSynthesizing ? "bg-slate-700" : "bg-sky-600 hover:bg-sky-500"
-                }`}
-              >
-                {isSynthesizing ? (
-                  <>
-                    <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                    Memproses...
-                  </>
-                ) : isPlaying ? (
-                  <>
-                    <Volume2 className="w-2.5 h-2.5 animate-bounce" />
-                    Membaca...
-                  </>
-                ) : (
-                  <>
-                    <Play className="w-2.5 h-2.5 fill-white" />
-                    Dengar Ringkasan
-                  </>
-                )}
-              </button>
-            </div>
-          </motion.div>
-
-          {/* FLOATING TRIGGER AVATAR */}
+      <AnimatePresence mode="wait">
+        {!isFloatingOpen ? (
           <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
+            key="collapsed-ai-assistant"
+            initial={{ opacity: 0, scale: 0.8, y: 10 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.8, y: 10 }}
             onClick={() => {
-              handleSynthesizeAndPlayWithText(textToRead || getTabSummaryText(activeTab, dashboardStats));
+              setIsFloatingOpen(true);
+              localStorage.setItem("ai_assistant_floating_open", "true");
+              info("Asisten Suara AI diaktifkan. Anda dapat menyembunyikan kembali kapan saja.");
             }}
-            className={`w-12 h-12 rounded-full flex items-center justify-center shadow-2xl relative cursor-pointer border transition-all ${
-              isPlaying 
-                ? "bg-emerald-600 border-emerald-500 text-white animate-pulse" 
-                : "bg-sky-600 border-sky-500 text-white hover:bg-sky-500"
-            }`}
+            className="fixed bottom-6 right-6 z-50 flex items-center gap-2 bg-slate-900/95 hover:bg-slate-800 border border-slate-750 text-white font-black text-xs px-4.5 py-3 rounded-full shadow-2xl transition-all cursor-pointer hover:scale-105 active:scale-95 no-print"
+            id="ai-assistant-show-button"
+            title="Tampilkan Asisten AI Suara"
           >
-            <span className={`absolute -inset-1 rounded-full border border-sky-400/30 -z-10 animate-ping ${isPlaying ? "opacity-100" : "opacity-0"}`} />
-            
-            {isPlaying ? (
-              <div className="flex items-end gap-0.5 h-3">
-                <span className="w-0.5 h-1.5 bg-white rounded-xs animate-bounce" />
-                <span className="w-0.5 h-3 bg-white rounded-xs animate-bounce" />
-                <span className="w-0.5 h-2.5 bg-white rounded-xs animate-bounce" />
-              </div>
-            ) : (
-              <Volume2 className="w-5 h-5" />
-            )}
+            <Sparkles className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+            <span>Asisten AI Suara</span>
           </motion.button>
-        </div>
+        ) : (
+          <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3 font-sans no-print" key="expanded-ai-assistant">
+            {/* SPEECH BUBBLE OVERLAY */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 10 }}
+              className="bg-slate-900/95 backdrop-blur-md text-white p-4 rounded-3xl shadow-xl border border-slate-700/60 max-w-xs flex flex-col gap-2.5 relative"
+            >
+              <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-1.5 pr-6">
+                <span className="text-[9px] font-black tracking-widest text-cyan-400 uppercase flex items-center gap-1">
+                  <Sparkles className="w-2.5 h-2.5" />
+                  Asisten Suara Aktif
+                </span>
+                <span className="text-[9px] font-extrabold text-slate-400 bg-white/10 px-2 py-0.5 rounded-md">
+                  {getTabFriendlyName(activeTab)}
+                </span>
+              </div>
+
+              {/* CLOSE BUTTON */}
+              <button
+                onClick={() => {
+                  setIsFloatingOpen(false);
+                  localStorage.setItem("ai_assistant_floating_open", "false");
+                  success("Asisten Suara AI disembunyikan.");
+                }}
+                className="absolute top-3 right-3 p-1 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-all cursor-pointer"
+                title="Sembunyikan Asisten"
+                id="ai-assistant-hide-button"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+              
+              <p className="text-[10px] text-slate-300 font-semibold leading-relaxed">
+                Halaman terdeteksi. Ingin asisten membacakan ringkasan data saat ini secara langsung?
+              </p>
+
+              {/* AUTOPITAL TOGGLE CONTROLLER */}
+              <div className="flex items-center justify-between bg-white/5 p-2 rounded-xl border border-white/5">
+                <span className="text-[9.5px] text-slate-300 font-bold">Baca Otomatis saat ganti tab</span>
+                <button
+                  type="button"
+                  onClick={toggleAutoPlay}
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    isAutoPlay ? "bg-emerald-500" : "bg-slate-600"
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out ${
+                      isAutoPlay ? "translate-x-4" : "translate-x-0"
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* ACTIONS */}
+              <div className="flex gap-2 justify-end pt-1">
+                {isPlaying && (
+                  <button
+                    onClick={stopAudio}
+                    className="px-2.5 py-1.5 bg-rose-600 hover:bg-rose-500 rounded-lg text-white font-extrabold text-[9.5px] transition-all flex items-center gap-1 cursor-pointer"
+                  >
+                    <Square className="w-2.5 h-2.5 fill-white" />
+                    Stop
+                  </button>
+                )}
+                
+                <button
+                  disabled={isSynthesizing}
+                  onClick={() => handleSynthesizeAndPlayWithText(textToRead || getTabSummaryText(activeTab, dashboardStats))}
+                  className={`px-3 py-1.5 text-white font-extrabold text-[9.5px] rounded-lg transition-all flex items-center gap-1 cursor-pointer ${
+                    isSynthesizing ? "bg-slate-700" : "bg-sky-600 hover:bg-sky-500"
+                  }`}
+                >
+                  {isSynthesizing ? (
+                    <>
+                      <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                      Memproses...
+                    </>
+                  ) : isPlaying ? (
+                    <>
+                      <Volume2 className="w-2.5 h-2.5 animate-bounce" />
+                      Membaca...
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-2.5 h-2.5 fill-white" />
+                      Dengar Ringkasan
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* COMPACT STT RECORDER IN FLOATING CARD */}
+              <div className="border-t border-slate-850 pt-2.5 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[9px] font-black uppercase tracking-wider text-emerald-400 flex items-center gap-1 select-none">
+                    <Mic className="w-2.5 h-2.5" />
+                    Dikte Suara (STT)
+                  </span>
+                  
+                  <select
+                    value={sttTarget}
+                    onChange={(e) => setSttTarget(e.target.value)}
+                    className="bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-[8.5px] font-bold text-slate-300 focus:outline-none"
+                  >
+                    <option value="catatan">Catatan Harian</option>
+                    <option value="temuan_lapangan">Deskripsi Temuan</option>
+                    <option value="pemeriksaan_temuan">Temuan BA (Pems)</option>
+                    <option value="pemeriksaan_rekomendasi">Rekomendasi (Pems)</option>
+                  </select>
+                </div>
+
+                {transcription && (
+                  <div className="bg-white/5 border border-white/10 p-2 rounded-xl text-[9.5px] text-slate-300 leading-relaxed font-semibold max-h-16 overflow-y-auto font-sans">
+                    {transcription}
+                  </div>
+                )}
+
+                <div className="flex gap-2 justify-between items-center">
+                  {transcription && (
+                    <button
+                      type="button"
+                      onClick={clearTranscription}
+                      className="text-[8.5px] font-bold text-slate-400 hover:text-rose-400 cursor-pointer"
+                    >
+                      Bersihkan
+                    </button>
+                  )}
+                  
+                  <div className="flex gap-1.5 ml-auto">
+                    <button
+                      type="button"
+                      onClick={isRecording ? stopSpeechToText : startSpeechToText}
+                      className={`px-2 py-1 rounded-lg text-[9px] font-black flex items-center gap-1 transition-all cursor-pointer ${
+                        isRecording 
+                          ? "bg-rose-600 text-white animate-pulse" 
+                          : "bg-emerald-650 hover:bg-emerald-600 text-white border border-emerald-600/20"
+                      }`}
+                    >
+                      <Mic className="w-2.5 h-2.5" />
+                      {isRecording ? "Stop" : "Mulai Dikte"}
+                    </button>
+
+                    {transcription && !isRecording && (
+                      <button
+                        type="button"
+                        onClick={handleInjectText}
+                        className="px-2 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-[9px] font-black flex items-center gap-1 cursor-pointer"
+                      >
+                        <Check className="w-2.5 h-2.5" />
+                        Kirim Ke Field
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+
+            {/* FLOATING TRIGGER AVATAR */}
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => {
+                handleSynthesizeAndPlayWithText(textToRead || getTabSummaryText(activeTab, dashboardStats));
+              }}
+              className={`w-12 h-12 rounded-full flex items-center justify-center shadow-2xl relative cursor-pointer border transition-all ${
+                isPlaying 
+                  ? "bg-emerald-600 border-emerald-500 text-white animate-pulse" 
+                  : "bg-sky-600 border-sky-500 text-white hover:bg-sky-500"
+              }`}
+            >
+              <span className={`absolute -inset-1 rounded-full border border-sky-400/30 -z-10 animate-ping ${isPlaying ? "opacity-100" : "opacity-0"}`} />
+              
+              {isPlaying ? (
+                <div className="flex items-end gap-0.5 h-3">
+                  <span className="w-0.5 h-1.5 bg-white rounded-xs animate-bounce" />
+                  <span className="w-0.5 h-3 bg-white rounded-xs animate-bounce" />
+                  <span className="w-0.5 h-2.5 bg-white rounded-xs animate-bounce" />
+                </div>
+              ) : (
+                <Volume2 className="w-5 h-5" />
+              )}
+            </motion.button>
+          </div>
+        )}
       </AnimatePresence>
     );
   }
@@ -537,6 +777,20 @@ export const AIVoiceAssistant: React.FC<AIVoiceAssistantProps> = ({
             >
               <Sparkles className="w-4 h-4 text-amber-500" />
               2. Buat Teks via AI & Bacakan
+            </button>
+            <button
+              onClick={() => {
+                setActiveMode("stt");
+                stopAudio();
+              }}
+              className={`flex-1 py-3 text-xs font-black rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                activeMode === "stt"
+                  ? "bg-sky-600 text-white shadow-xs"
+                  : "text-slate-600 hover:bg-slate-50 hover:text-slate-800"
+              }`}
+            >
+              <Mic className="w-4 h-4 text-emerald-500" />
+              3. Dikte Suara (Voice-to-Text)
             </button>
           </div>
 
@@ -766,6 +1020,149 @@ export const AIVoiceAssistant: React.FC<AIVoiceAssistantProps> = ({
                       Buat Draf Naskah Sekarang
                     </>
                   )}
+                </button>
+              </div>
+            </motion.div>
+          )}
+
+          {/* VIEW: SPEECH-TO-TEXT DICTATION */}
+          {activeMode === "stt" && (
+            <motion.div 
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-white border border-slate-200 p-6 rounded-3xl shadow-xs space-y-5"
+            >
+              <div className="space-y-1">
+                <h3 className="text-sm font-black text-slate-800 flex items-center gap-1.5">
+                  <Mic className="w-4 h-4 text-emerald-500" />
+                  Dikte Suara Langsung (Voice-to-Text)
+                </h3>
+                <p className="text-[10px] text-slate-400 font-bold">
+                  Gunakan mikrofon Anda untuk mendikte catatan atau temuan lapangan secara langsung ke dalam form aktif
+                </p>
+              </div>
+
+              {/* RECORDING INTERFACE */}
+              <div className="p-5 rounded-2xl bg-slate-50 border border-slate-150 flex flex-col items-center justify-center gap-4 relative overflow-hidden">
+                {isRecording && (
+                  <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-500 animate-pulse" />
+                )}
+
+                <div className="flex flex-col items-center gap-2">
+                  <motion.button
+                    type="button"
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={isRecording ? stopSpeechToText : startSpeechToText}
+                    className={`w-16 h-16 rounded-full flex items-center justify-center shadow-lg cursor-pointer border transition-all ${
+                      isRecording 
+                        ? "bg-rose-600 border-rose-500 text-white animate-pulse" 
+                        : "bg-emerald-600 border-emerald-500 text-white hover:bg-emerald-500"
+                    }`}
+                  >
+                    {isRecording ? (
+                      <div className="flex items-end gap-1 h-5">
+                        <span className="w-1 h-3 bg-white rounded-full animate-bounce inline-block" />
+                        <span className="w-1 h-5 bg-white rounded-full animate-bounce inline-block" />
+                        <span className="w-1 h-4 bg-white rounded-full animate-bounce inline-block" />
+                      </div>
+                    ) : (
+                      <Mic className="w-7 h-7" />
+                    )}
+                  </motion.button>
+                  
+                  <span className={`text-xs font-black uppercase tracking-wider ${isRecording ? "text-rose-600 animate-pulse" : "text-slate-600"}`}>
+                    {isRecording ? "Mendengarkan Suara..." : "Ketuk untuk Mulai Dikte"}
+                  </span>
+                </div>
+
+                {isRecording && (
+                  <div className="flex items-center gap-2 text-[10px] text-emerald-600 font-extrabold bg-emerald-50 border border-emerald-100 px-3 py-1 rounded-full animate-pulse">
+                    <Activity className="w-3.5 h-3.5" />
+                    Bicaralah sekarang (Bahasa Indonesia dioptimasi)
+                  </div>
+                )}
+              </div>
+
+              {/* TRANSCRIPTION RESULT */}
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center">
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Hasil Transkripsi Suara (Real-time)</label>
+                  {transcription && (
+                    <button 
+                      type="button"
+                      onClick={clearTranscription}
+                      className="text-[10px] text-slate-400 hover:text-rose-600 font-bold cursor-pointer"
+                    >
+                      Bersihkan
+                    </button>
+                  )}
+                </div>
+                <textarea
+                  rows={4}
+                  value={transcription}
+                  onChange={(e) => setTranscription(e.target.value)}
+                  placeholder="Hasil ucapan Anda akan muncul di sini secara otomatis..."
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 text-xs font-bold text-slate-800 leading-relaxed placeholder:text-slate-400 font-sans"
+                />
+              </div>
+
+              {/* TARGET FIELD SELECTOR */}
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block">Pilih Field Formulir Target:</label>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {[
+                    { id: "catatan", label: "Catatan / Instruksi Harian", desc: "Instruksi pimpinan di Dashboard Utama" },
+                    { id: "temuan_lapangan", label: "Deskripsi Temuan (Temuan)", desc: "Uraian temuan di Form Uraian Temuan Baru" },
+                    { id: "pemeriksaan_temuan", label: "Uraian Temuan BA (Pemeriksaan)", desc: "Temuan kelayakan di Form Pemeriksaan Baru" },
+                    { id: "pemeriksaan_rekomendasi", label: "Rekomendasi Tindakan (Pemeriksaan)", desc: "Rekomendasi pengawasan di Form Pemeriksaan" }
+                  ].map((target) => {
+                    const isSelected = sttTarget === target.id;
+                    return (
+                      <button
+                        type="button"
+                        key={target.id}
+                        onClick={() => setSttTarget(target.id)}
+                        className={`p-3.5 rounded-2xl border text-left transition-all flex flex-col gap-1 cursor-pointer ${
+                          isSelected
+                            ? "bg-sky-50 border-sky-500 shadow-sm"
+                            : "bg-white border-slate-200 hover:border-slate-300"
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 justify-between">
+                          <span className={`text-[11px] font-black ${isSelected ? "text-sky-700" : "text-slate-800"}`}>
+                            {target.label}
+                          </span>
+                          {isSelected && <span className="w-2 h-2 rounded-full bg-sky-500 animate-ping" />}
+                        </div>
+                        <span className="text-[9.5px] text-slate-500 leading-relaxed font-semibold">
+                          {target.desc}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* ACTION INJECT BUTTON */}
+              <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center pt-2.5 gap-3 border-t border-slate-100">
+                <div className="text-[10.5px] text-slate-400 font-bold flex items-center gap-1.5">
+                  <Settings className="w-3.5 h-3.5 text-slate-300" />
+                  Gunakan Chrome / Edge untuk performa Web Speech terbaik
+                </div>
+                
+                <button
+                  type="button"
+                  disabled={isRecording || !transcription.trim()}
+                  onClick={handleInjectText}
+                  className={`px-6 py-2.5 text-white font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                    !transcription.trim() || isRecording
+                      ? "bg-slate-350 text-slate-400 shadow-none cursor-not-allowed"
+                      : "bg-sky-600 hover:bg-sky-500"
+                  }`}
+                >
+                  <Check className="w-4 h-4" />
+                  Masukkan ke Field Terbuka
                 </button>
               </div>
             </motion.div>

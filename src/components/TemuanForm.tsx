@@ -86,6 +86,7 @@ export const TemuanForm: React.FC<TemuanFormProps> = ({
           <div>
             <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Deskripsi Uraian Temuan Lapangan</label>
             <textarea
+              id="uraianTemuan"
               required
               rows={4}
               value={uraianTemuan}

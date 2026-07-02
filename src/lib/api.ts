@@ -30,6 +30,81 @@ let cachedConfig: {
   REALISASI_Q4?: number;
 } | null = null;
 
+const OFFLINE_QUEUE_KEY = "sdkp_offline_queue";
+
+export interface QueueItem {
+  id: string;
+  action: "create" | "update" | "delete";
+  entity: "pemeriksaan" | "temuan" | "dokumen" | "notes" | "users";
+  entityId: string;
+  payload: any;
+  timestamp: number;
+}
+
+function getOfflineQueue(): QueueItem[] {
+  try {
+    return JSON.parse(localStorage.getItem(OFFLINE_QUEUE_KEY) || "[]");
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveOfflineQueue(queue: QueueItem[]) {
+  localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+  window.dispatchEvent(new Event("offline_queue_changed"));
+}
+
+function addToQueue(action: "create" | "update" | "delete", entity: QueueItem["entity"], entityId: string, payload: any) {
+  const queue = getOfflineQueue();
+  queue.push({
+    id: `q_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+    action,
+    entity,
+    entityId,
+    payload,
+    timestamp: Date.now()
+  });
+  saveOfflineQueue(queue);
+}
+
+function getCache<T>(key: string): T | null {
+  try {
+    const val = localStorage.getItem(`cached_${key}`);
+    return val ? JSON.parse(val) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function setCache<T>(key: string, data: T) {
+  try {
+    localStorage.setItem(`cached_${key}`, JSON.stringify(data));
+  } catch (e) {
+    console.error("Failed to write cache for " + key, e);
+  }
+}
+
+function applyOfflineQueue<T extends { id: any }>(entity: QueueItem["entity"], baseData: T[]): T[] {
+  const queue = getOfflineQueue();
+  let result = [...baseData];
+
+  for (const item of queue) {
+    if (item.entity !== entity) continue;
+
+    if (item.action === "create") {
+      if (!result.some(r => String(r.id) === String(item.entityId))) {
+        result.push({ id: item.entityId, ...item.payload });
+      }
+    } else if (item.action === "update") {
+      result = result.map(r => String(r.id) === String(item.entityId) ? { ...r, ...item.payload } : r);
+    } else if (item.action === "delete") {
+      result = result.filter(r => String(r.id) !== String(item.entityId));
+    }
+  }
+
+  return result;
+}
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, options);
   const text = await res.text();
@@ -197,96 +272,178 @@ export const api = {
 
   // Config management
   getConfig: async () => {
-    const data = await request<{ DATA_PERSISTENCE_MODE: string; GAS_WEB_APP_URL: string; SPREADSHEET_ID: string }>(`${BASE_URL}/config`);
-    cachedConfig = data;
-    return data;
+    try {
+      const data = await request<{ DATA_PERSISTENCE_MODE: string; GAS_WEB_APP_URL: string; SPREADSHEET_ID: string }>(`${BASE_URL}/config`);
+      cachedConfig = data;
+      setCache("config", data);
+      return data;
+    } catch (err: any) {
+      console.warn("Fetch getConfig failed, loading offline fallback:", err.message);
+      const data = getCache<{ DATA_PERSISTENCE_MODE: string; GAS_WEB_APP_URL: string; SPREADSHEET_ID: string }>("config");
+      if (data) {
+        cachedConfig = data;
+        return data;
+      }
+      return { DATA_PERSISTENCE_MODE: "local", GAS_WEB_APP_URL: "", SPREADSHEET_ID: "" };
+    }
   },
 
   updateConfig: async (data: { DATA_PERSISTENCE_MODE: string; GAS_WEB_APP_URL: string; SPREADSHEET_ID: string }) => {
-    const result = await request<any>(`${BASE_URL}/config`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
-    cachedConfig = data;
-    return result;
+    try {
+      const result = await request<any>(`${BASE_URL}/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      cachedConfig = data;
+      setCache("config", data);
+      return result;
+    } catch (err: any) {
+      cachedConfig = data;
+      setCache("config", data);
+      // For config we don't queue, just allow offline fallback of variables
+      return { success: true };
+    }
   },
 
   // Users management
   getUsers: async (): Promise<User[]> => {
-    if (isDirectSheetMode()) {
-      const token = await getAccessToken();
-      if (token) {
-        try {
-          return await googleSheetsApi.getRows(token, cachedConfig!.SPREADSHEET_ID, "Users") as User[];
-        } catch (err: any) {
-          console.warn("Direct-sheet getUsers failed, falling back to local DB:", err.message);
+    try {
+      let data: User[] = [];
+      if (isDirectSheetMode()) {
+        const token = await getAccessToken();
+        if (token) {
+          data = await googleSheetsApi.getRows(token, cachedConfig!.SPREADSHEET_ID, "Users") as User[];
+        } else {
+          data = await request<User[]>(`${BASE_URL}/users`);
         }
+      } else {
+        data = await request<User[]>(`${BASE_URL}/users`);
       }
+      setCache("users", data);
+      return applyOfflineQueue("users", data);
+    } catch (err: any) {
+      console.warn("Fetch getUsers failed, loading offline fallback:", err.message);
+      const cached = getCache<User[]>("users") || [];
+      return applyOfflineQueue("users", cached);
     }
-    return request<User[]>(`${BASE_URL}/users`);
   },
 
   createUser: async (user: Partial<User>) => {
     const payload = {
       id: user.id || `u_${Date.now()}`,
       ...user
-    };
-    if (isDirectSheetMode()) {
-      const token = await getAccessToken();
-      if (token) {
-        await googleSheetsApi.appendRow(token, cachedConfig!.SPREADSHEET_ID, "Users", payload);
-        return payload as User;
-      }
+    } as User;
+
+    if (!navigator.onLine) {
+      addToQueue("create", "users", payload.id, payload);
+      const cached = getCache<User[]>("users") || [];
+      setCache("users", [...cached, payload]);
+      return payload;
     }
-    return request<User>(`${BASE_URL}/users`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+
+    try {
+      if (isDirectSheetMode()) {
+        const token = await getAccessToken();
+        if (token) {
+          await googleSheetsApi.appendRow(token, cachedConfig!.SPREADSHEET_ID, "Users", payload);
+          return payload as User;
+        }
+      }
+      return await request<User>(`${BASE_URL}/users`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      addToQueue("create", "users", payload.id, payload);
+      const cached = getCache<User[]>("users") || [];
+      setCache("users", [...cached, payload]);
+      return payload;
+    }
   },
 
   updateUser: async (id: string, user: Partial<User>) => {
-    if (isDirectSheetMode()) {
-      const token = await getAccessToken();
-      if (token) {
-        await googleSheetsApi.updateRow(token, cachedConfig!.SPREADSHEET_ID, "Users", id, user);
-        return { id, ...user } as User;
-      }
+    if (!navigator.onLine) {
+      addToQueue("update", "users", id, user);
+      const cached = getCache<User[]>("users") || [];
+      const updated = cached.map(item => item.id === id ? { ...item, ...user } : item);
+      setCache("users", updated);
+      return { id, ...user } as User;
     }
-    return request<User>(`${BASE_URL}/users/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(user),
-    });
+
+    try {
+      if (isDirectSheetMode()) {
+        const token = await getAccessToken();
+        if (token) {
+          await googleSheetsApi.updateRow(token, cachedConfig!.SPREADSHEET_ID, "Users", id, user);
+          return { id, ...user } as User;
+        }
+      }
+      return await request<User>(`${BASE_URL}/users/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(user),
+      });
+    } catch (err) {
+      addToQueue("update", "users", id, user);
+      const cached = getCache<User[]>("users") || [];
+      const updated = cached.map(item => item.id === id ? { ...item, ...user } : item);
+      setCache("users", updated);
+      return { id, ...user } as User;
+    }
   },
 
   deleteUser: async (id: string) => {
-    if (isDirectSheetMode()) {
-      const token = await getAccessToken();
-      if (token) {
-        await googleSheetsApi.deleteRow(token, cachedConfig!.SPREADSHEET_ID, "Users", id);
-        return { success: true };
-      }
+    if (!navigator.onLine) {
+      addToQueue("delete", "users", id, null);
+      const cached = getCache<User[]>("users") || [];
+      const filtered = cached.filter(item => item.id !== id);
+      setCache("users", filtered);
+      return { success: true };
     }
-    return request<any>(`${BASE_URL}/users/${id}`, {
-      method: "DELETE",
-    });
+
+    try {
+      if (isDirectSheetMode()) {
+        const token = await getAccessToken();
+        if (token) {
+          await googleSheetsApi.deleteRow(token, cachedConfig!.SPREADSHEET_ID, "Users", id);
+          return { success: true };
+        }
+      }
+      return await request<any>(`${BASE_URL}/users/${id}`, {
+        method: "DELETE",
+      });
+    } catch (err) {
+      addToQueue("delete", "users", id, null);
+      const cached = getCache<User[]>("users") || [];
+      const filtered = cached.filter(item => item.id !== id);
+      setCache("users", filtered);
+      return { success: true };
+    }
   },
 
   // Pemeriksaan
   getPemeriksaan: async (): Promise<Pemeriksaan[]> => {
-    if (isDirectSheetMode()) {
-      const token = await getAccessToken();
-      if (token) {
-        try {
-          return await googleSheetsApi.getRows(token, cachedConfig!.SPREADSHEET_ID, "Pemeriksaan") as Pemeriksaan[];
-        } catch (err: any) {
-          console.warn("Direct-sheet getPemeriksaan failed, falling back to local DB:", err.message);
+    try {
+      let data: Pemeriksaan[] = [];
+      if (isDirectSheetMode()) {
+        const token = await getAccessToken();
+        if (token) {
+          data = await googleSheetsApi.getRows(token, cachedConfig!.SPREADSHEET_ID, "Pemeriksaan") as Pemeriksaan[];
+        } else {
+          data = await request<Pemeriksaan[]>(`${BASE_URL}/pemeriksaan`);
         }
+      } else {
+        data = await request<Pemeriksaan[]>(`${BASE_URL}/pemeriksaan`);
       }
+      setCache("pemeriksaan", data);
+      return applyOfflineQueue("pemeriksaan", data);
+    } catch (err: any) {
+      console.warn("Fetch getPemeriksaan failed, loading offline fallback:", err.message);
+      const cached = getCache<Pemeriksaan[]>("pemeriksaan") || [];
+      return applyOfflineQueue("pemeriksaan", cached);
     }
-    return request<Pemeriksaan[]>(`${BASE_URL}/pemeriksaan`);
   },
 
   createPemeriksaan: async (form: Partial<Pemeriksaan>) => {
@@ -294,88 +451,143 @@ export const api = {
       id: form.id || `p_${Date.now()}`,
       created_at: new Date().toISOString(),
       ...form
-    };
-    if (isDirectSheetMode()) {
-      const token = await getAccessToken();
-      if (token) {
-        await googleSheetsApi.appendRow(token, cachedConfig!.SPREADSHEET_ID, "Pemeriksaan", payload);
-        return payload as Pemeriksaan;
-      }
+    } as Pemeriksaan;
+
+    if (!navigator.onLine) {
+      addToQueue("create", "pemeriksaan", payload.id, payload);
+      const cached = getCache<Pemeriksaan[]>("pemeriksaan") || [];
+      setCache("pemeriksaan", [...cached, payload]);
+      return payload;
     }
-    return request<Pemeriksaan>(`${BASE_URL}/pemeriksaan`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+
+    try {
+      if (isDirectSheetMode()) {
+        const token = await getAccessToken();
+        if (token) {
+          await googleSheetsApi.appendRow(token, cachedConfig!.SPREADSHEET_ID, "Pemeriksaan", payload);
+          return payload as Pemeriksaan;
+        }
+      }
+      return await request<Pemeriksaan>(`${BASE_URL}/pemeriksaan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      addToQueue("create", "pemeriksaan", payload.id, payload);
+      const cached = getCache<Pemeriksaan[]>("pemeriksaan") || [];
+      setCache("pemeriksaan", [...cached, payload]);
+      return payload;
+    }
   },
 
   updatePemeriksaan: async (id: string, form: Partial<Pemeriksaan>) => {
-    if (isDirectSheetMode()) {
-      const token = await getAccessToken();
-      if (token) {
-        await googleSheetsApi.updateRow(token, cachedConfig!.SPREADSHEET_ID, "Pemeriksaan", id, form);
-        return { id, ...form } as Pemeriksaan;
-      }
+    if (!navigator.onLine) {
+      addToQueue("update", "pemeriksaan", id, form);
+      const cached = getCache<Pemeriksaan[]>("pemeriksaan") || [];
+      const updated = cached.map(item => item.id === id ? { ...item, ...form } : item);
+      setCache("pemeriksaan", updated);
+      return { id, ...form } as Pemeriksaan;
     }
-    return request<Pemeriksaan>(`${BASE_URL}/pemeriksaan/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
-    });
+
+    try {
+      if (isDirectSheetMode()) {
+        const token = await getAccessToken();
+        if (token) {
+          await googleSheetsApi.updateRow(token, cachedConfig!.SPREADSHEET_ID, "Pemeriksaan", id, form);
+          return { id, ...form } as Pemeriksaan;
+        }
+      }
+      return await request<Pemeriksaan>(`${BASE_URL}/pemeriksaan/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+    } catch (err) {
+      addToQueue("update", "pemeriksaan", id, form);
+      const cached = getCache<Pemeriksaan[]>("pemeriksaan") || [];
+      const updated = cached.map(item => item.id === id ? { ...item, ...form } : item);
+      setCache("pemeriksaan", updated);
+      return { id, ...form } as Pemeriksaan;
+    }
   },
 
   deletePemeriksaan: async (id: string) => {
-    if (isDirectSheetMode()) {
-      const token = await getAccessToken();
-      if (token) {
-        // Cascade delete parent
-        await googleSheetsApi.deleteRow(token, cachedConfig!.SPREADSHEET_ID, "Pemeriksaan", id);
-        
-        // Cascade delete Documents matching pemeriksaan_id
-        try {
-          const docs = await googleSheetsApi.getRows(token, cachedConfig!.SPREADSHEET_ID, "Dokumen");
-          for (const d of docs) {
-            if (String(d.pemeriksaan_id) === String(id)) {
-              await googleSheetsApi.deleteRow(token, cachedConfig!.SPREADSHEET_ID, "Dokumen", d.id);
-            }
-          }
-        } catch (err) {
-          console.error("Cascade documents delete skip:", err);
-        }
-
-        // Cascade delete Temuan matching pemeriksaan_id
-        try {
-          const tems = await googleSheetsApi.getRows(token, cachedConfig!.SPREADSHEET_ID, "Temuan");
-          for (const t of tems) {
-            if (String(t.pemeriksaan_id) === String(id)) {
-              await googleSheetsApi.deleteRow(token, cachedConfig!.SPREADSHEET_ID, "Temuan", t.id);
-            }
-          }
-        } catch (err) {
-          console.error("Cascade temuan delete skip:", err);
-        }
-
-        return { success: true };
-      }
+    if (!navigator.onLine) {
+      addToQueue("delete", "pemeriksaan", id, null);
+      const cached = getCache<Pemeriksaan[]>("pemeriksaan") || [];
+      const filtered = cached.filter(item => item.id !== id);
+      setCache("pemeriksaan", filtered);
+      return { success: true };
     }
-    return request<any>(`${BASE_URL}/pemeriksaan/${id}`, {
-      method: "DELETE",
-    });
+
+    try {
+      if (isDirectSheetMode()) {
+        const token = await getAccessToken();
+        if (token) {
+          // Cascade delete parent
+          await googleSheetsApi.deleteRow(token, cachedConfig!.SPREADSHEET_ID, "Pemeriksaan", id);
+          
+          // Cascade delete Documents matching pemeriksaan_id
+          try {
+            const docs = await googleSheetsApi.getRows(token, cachedConfig!.SPREADSHEET_ID, "Dokumen");
+            for (const d of docs) {
+              if (String(d.pemeriksaan_id) === String(id)) {
+                await googleSheetsApi.deleteRow(token, cachedConfig!.SPREADSHEET_ID, "Dokumen", d.id);
+              }
+            }
+          } catch (err) {
+            console.error("Cascade documents delete skip:", err);
+          }
+
+          // Cascade delete Temuan matching pemeriksaan_id
+          try {
+            const tems = await googleSheetsApi.getRows(token, cachedConfig!.SPREADSHEET_ID, "Temuan");
+            for (const t of tems) {
+              if (String(t.pemeriksaan_id) === String(id)) {
+                await googleSheetsApi.deleteRow(token, cachedConfig!.SPREADSHEET_ID, "Temuan", t.id);
+              }
+            }
+          } catch (err) {
+            console.error("Cascade temuan delete skip:", err);
+          }
+
+          return { success: true };
+        }
+      }
+      return await request<any>(`${BASE_URL}/pemeriksaan/${id}`, {
+        method: "DELETE",
+      });
+    } catch (err) {
+      addToQueue("delete", "pemeriksaan", id, null);
+      const cached = getCache<Pemeriksaan[]>("pemeriksaan") || [];
+      const filtered = cached.filter(item => item.id !== id);
+      setCache("pemeriksaan", filtered);
+      return { success: true };
+    }
   },
 
   // Dokumen
   getDokumen: async (): Promise<Dokumen[]> => {
-    if (isDirectSheetMode()) {
-      const token = await getAccessToken();
-      if (token) {
-        try {
-          return await googleSheetsApi.getRows(token, cachedConfig!.SPREADSHEET_ID, "Dokumen") as Dokumen[];
-        } catch (err: any) {
-          console.log(`Direct-sheet Sync info: using local DB for getDokumen fallback (Reason: ${err.message})`);
+    try {
+      let data: Dokumen[] = [];
+      if (isDirectSheetMode()) {
+        const token = await getAccessToken();
+        if (token) {
+          data = await googleSheetsApi.getRows(token, cachedConfig!.SPREADSHEET_ID, "Dokumen") as Dokumen[];
+        } else {
+          data = await request<Dokumen[]>(`${BASE_URL}/dokumen`);
         }
+      } else {
+        data = await request<Dokumen[]>(`${BASE_URL}/dokumen`);
       }
+      setCache("dokumen", data);
+      return applyOfflineQueue("dokumen", data);
+    } catch (err: any) {
+      console.warn("Fetch getDokumen failed, loading offline fallback:", err.message);
+      const cached = getCache<Dokumen[]>("dokumen") || [];
+      return applyOfflineQueue("dokumen", cached);
     }
-    return request<Dokumen[]>(`${BASE_URL}/dokumen`);
   },
 
   createDokumen: async (doc: Partial<Dokumen>) => {
@@ -383,62 +595,117 @@ export const api = {
       id: doc.id || `d_${Date.now()}`,
       status: doc.status || "Verifikasi",
       ...doc
-    };
-    if (isDirectSheetMode()) {
-      const token = await getAccessToken();
-      if (token) {
-        await googleSheetsApi.appendRow(token, cachedConfig!.SPREADSHEET_ID, "Dokumen", payload);
-        return payload as Dokumen;
-      }
+    } as Dokumen;
+
+    if (!navigator.onLine) {
+      addToQueue("create", "dokumen", payload.id, payload);
+      const cached = getCache<Dokumen[]>("dokumen") || [];
+      setCache("dokumen", [...cached, payload]);
+      return payload;
     }
-    return request<Dokumen>(`${BASE_URL}/dokumen`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+
+    try {
+      if (isDirectSheetMode()) {
+        const token = await getAccessToken();
+        if (token) {
+          await googleSheetsApi.appendRow(token, cachedConfig!.SPREADSHEET_ID, "Dokumen", payload);
+          return payload as Dokumen;
+        }
+      }
+      return await request<Dokumen>(`${BASE_URL}/dokumen`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      addToQueue("create", "dokumen", payload.id, payload);
+      const cached = getCache<Dokumen[]>("dokumen") || [];
+      setCache("dokumen", [...cached, payload]);
+      return payload;
+    }
   },
 
   updateDokumen: async (id: string, doc: Partial<Dokumen>) => {
-    if (isDirectSheetMode()) {
-      const token = await getAccessToken();
-      if (token) {
-        await googleSheetsApi.updateRow(token, cachedConfig!.SPREADSHEET_ID, "Dokumen", id, doc);
-        return { id, ...doc } as Dokumen;
-      }
+    if (!navigator.onLine) {
+      addToQueue("update", "dokumen", id, doc);
+      const cached = getCache<Dokumen[]>("dokumen") || [];
+      const updated = cached.map(item => item.id === id ? { ...item, ...doc } : item);
+      setCache("dokumen", updated);
+      return { id, ...doc } as Dokumen;
     }
-    return request<Dokumen>(`${BASE_URL}/dokumen/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(doc),
-    });
+
+    try {
+      if (isDirectSheetMode()) {
+        const token = await getAccessToken();
+        if (token) {
+          await googleSheetsApi.updateRow(token, cachedConfig!.SPREADSHEET_ID, "Dokumen", id, doc);
+          return { id, ...doc } as Dokumen;
+        }
+      }
+      return await request<Dokumen>(`${BASE_URL}/dokumen/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(doc),
+      });
+    } catch (err) {
+      addToQueue("update", "dokumen", id, doc);
+      const cached = getCache<Dokumen[]>("dokumen") || [];
+      const updated = cached.map(item => item.id === id ? { ...item, ...doc } : item);
+      setCache("dokumen", updated);
+      return { id, ...doc } as Dokumen;
+    }
   },
 
   deleteDokumen: async (id: string) => {
-    if (isDirectSheetMode()) {
-      const token = await getAccessToken();
-      if (token) {
-        await googleSheetsApi.deleteRow(token, cachedConfig!.SPREADSHEET_ID, "Dokumen", id);
-        return { success: true };
-      }
+    if (!navigator.onLine) {
+      addToQueue("delete", "dokumen", id, null);
+      const cached = getCache<Dokumen[]>("dokumen") || [];
+      const filtered = cached.filter(item => item.id !== id);
+      setCache("dokumen", filtered);
+      return { success: true };
     }
-    return request<any>(`${BASE_URL}/dokumen/${id}`, {
-      method: "DELETE",
-    });
+
+    try {
+      if (isDirectSheetMode()) {
+        const token = await getAccessToken();
+        if (token) {
+          await googleSheetsApi.deleteRow(token, cachedConfig!.SPREADSHEET_ID, "Dokumen", id);
+          return { success: true };
+        }
+      }
+      return await request<any>(`${BASE_URL}/dokumen/${id}`, {
+        method: "DELETE",
+      });
+    } catch (err) {
+      addToQueue("delete", "dokumen", id, null);
+      const cached = getCache<Dokumen[]>("dokumen") || [];
+      const filtered = cached.filter(item => item.id !== id);
+      setCache("dokumen", filtered);
+      return { success: true };
+    }
   },
 
   // Temuan
   getTemuan: async (): Promise<Temuan[]> => {
-    if (isDirectSheetMode()) {
-      const token = await getAccessToken();
-      if (token) {
-        try {
-          return await googleSheetsApi.getRows(token, cachedConfig!.SPREADSHEET_ID, "Temuan") as Temuan[];
-        } catch (err: any) {
-          console.log(`Direct-sheet Sync info: using local DB for getTemuan fallback (Reason: ${err.message})`);
+    try {
+      let data: Temuan[] = [];
+      if (isDirectSheetMode()) {
+        const token = await getAccessToken();
+        if (token) {
+          data = await googleSheetsApi.getRows(token, cachedConfig!.SPREADSHEET_ID, "Temuan") as Temuan[];
+        } else {
+          data = await request<Temuan[]>(`${BASE_URL}/temuan`);
         }
+      } else {
+        data = await request<Temuan[]>(`${BASE_URL}/temuan`);
       }
+      setCache("temuan", data);
+      return applyOfflineQueue("temuan", data);
+    } catch (err: any) {
+      console.warn("Fetch getTemuan failed, loading offline fallback:", err.message);
+      const cached = getCache<Temuan[]>("temuan") || [];
+      return applyOfflineQueue("temuan", cached);
     }
-    return request<Temuan[]>(`${BASE_URL}/temuan`);
   },
 
   createTemuan: async (item: Partial<Temuan>) => {
@@ -447,19 +714,34 @@ export const api = {
       status_tindak_lanjut: item.status_tindak_lanjut || "Open",
       tanggal_update: new Date().toISOString().split("T")[0],
       ...item
-    };
-    if (isDirectSheetMode()) {
-      const token = await getAccessToken();
-      if (token) {
-        await googleSheetsApi.appendRow(token, cachedConfig!.SPREADSHEET_ID, "Temuan", payload);
-        return payload as Temuan;
-      }
+    } as Temuan;
+
+    if (!navigator.onLine) {
+      addToQueue("create", "temuan", payload.id, payload);
+      const cached = getCache<Temuan[]>("temuan") || [];
+      setCache("temuan", [...cached, payload]);
+      return payload;
     }
-    return request<Temuan>(`${BASE_URL}/temuan`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+
+    try {
+      if (isDirectSheetMode()) {
+        const token = await getAccessToken();
+        if (token) {
+          await googleSheetsApi.appendRow(token, cachedConfig!.SPREADSHEET_ID, "Temuan", payload);
+          return payload as Temuan;
+        }
+      }
+      return await request<Temuan>(`${BASE_URL}/temuan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      addToQueue("create", "temuan", payload.id, payload);
+      const cached = getCache<Temuan[]>("temuan") || [];
+      setCache("temuan", [...cached, payload]);
+      return payload;
+    }
   },
 
   updateTemuan: async (id: string, item: Partial<Temuan>) => {
@@ -467,110 +749,264 @@ export const api = {
       tanggal_update: new Date().toISOString().split("T")[0],
       ...item
     };
-    if (isDirectSheetMode()) {
-      const token = await getAccessToken();
-      if (token) {
-        await googleSheetsApi.updateRow(token, cachedConfig!.SPREADSHEET_ID, "Temuan", id, payload);
-        return { id, ...payload } as Temuan;
-      }
+
+    if (!navigator.onLine) {
+      addToQueue("update", "temuan", id, payload);
+      const cached = getCache<Temuan[]>("temuan") || [];
+      const updated = cached.map(item => item.id === id ? { ...item, ...payload } : item);
+      setCache("temuan", updated);
+      return { id, ...payload } as Temuan;
     }
-    return request<Temuan>(`${BASE_URL}/temuan/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+
+    try {
+      if (isDirectSheetMode()) {
+        const token = await getAccessToken();
+        if (token) {
+          await googleSheetsApi.updateRow(token, cachedConfig!.SPREADSHEET_ID, "Temuan", id, payload);
+          return { id, ...payload } as Temuan;
+        }
+      }
+      return await request<Temuan>(`${BASE_URL}/temuan/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      addToQueue("update", "temuan", id, payload);
+      const cached = getCache<Temuan[]>("temuan") || [];
+      const updated = cached.map(item => item.id === id ? { ...item, ...payload } : item);
+      setCache("temuan", updated);
+      return { id, ...payload } as Temuan;
+    }
   },
 
   deleteTemuan: async (id: string) => {
-    if (isDirectSheetMode()) {
-      const token = await getAccessToken();
-      if (token) {
-        await googleSheetsApi.deleteRow(token, cachedConfig!.SPREADSHEET_ID, "Temuan", id);
-        return { success: true };
-      }
+    if (!navigator.onLine) {
+      addToQueue("delete", "temuan", id, null);
+      const cached = getCache<Temuan[]>("temuan") || [];
+      const filtered = cached.filter(item => item.id !== id);
+      setCache("temuan", filtered);
+      return { success: true };
     }
-    return request<any>(`${BASE_URL}/temuan/${id}`, {
-      method: "DELETE",
-    });
+
+    try {
+      if (isDirectSheetMode()) {
+        const token = await getAccessToken();
+        if (token) {
+          await googleSheetsApi.deleteRow(token, cachedConfig!.SPREADSHEET_ID, "Temuan", id);
+          return { success: true };
+        }
+      }
+      return await request<any>(`${BASE_URL}/temuan/${id}`, {
+        method: "DELETE",
+      });
+    } catch (err) {
+      addToQueue("delete", "temuan", id, null);
+      const cached = getCache<Temuan[]>("temuan") || [];
+      const filtered = cached.filter(item => item.id !== id);
+      setCache("temuan", filtered);
+      return { success: true };
+    }
   },
 
   // Master Satwas
   getSatwas: async (): Promise<MasterSatwas[]> => {
-    if (isDirectSheetMode()) {
-      const token = await getAccessToken();
-      if (token) {
-        try {
-          const rows = await googleSheetsApi.getRows(token, cachedConfig!.SPREADSHEET_ID, "MasterSatwas");
-          if (rows.length > 0) {
-            return rows as MasterSatwas[];
-          }
-        } catch (err: any) {
-          console.warn("Direct-sheet getSatwas failed, falling back to local DB:", err.message);
+    try {
+      let data: MasterSatwas[] = [];
+      if (isDirectSheetMode()) {
+        const token = await getAccessToken();
+        if (token) {
+          data = await googleSheetsApi.getRows(token, cachedConfig!.SPREADSHEET_ID, "MasterSatwas") as MasterSatwas[];
+        } else {
+          data = await request<MasterSatwas[]>(`${BASE_URL}/satwas`);
         }
+      } else {
+        data = await request<MasterSatwas[]>(`${BASE_URL}/satwas`);
       }
+      setCache("satwas", data);
+      return data;
+    } catch (err: any) {
+      console.warn("Fetch getSatwas failed, loading offline fallback:", err.message);
+      return getCache<MasterSatwas[]>("satwas") || [];
     }
-    return request<MasterSatwas[]>(`${BASE_URL}/satwas`);
   },
 
   // Dashboard Stats
   getDashboardStats: async (): Promise<DashboardStats> => {
-    if (isDirectSheetMode()) {
-      const token = await getAccessToken();
-      if (token) {
-        try {
-          const pems = await googleSheetsApi.getRows(token, cachedConfig!.SPREADSHEET_ID, "Pemeriksaan");
-          return calculateDashboardStats(pems as Pemeriksaan[]);
-        } catch (err: any) {
-          console.warn("Direct-sheet getDashboardStats failed, falling back to local DB calculation:", err.message);
+    try {
+      let stats: DashboardStats;
+      if (isDirectSheetMode()) {
+        const token = await getAccessToken();
+        if (token) {
+          const pems = await googleSheetsApi.getRows(token, cachedConfig!.SPREADSHEET_ID, "Pemeriksaan") as Pemeriksaan[];
+          stats = calculateDashboardStats(pems);
+        } else {
+          stats = await request<DashboardStats>(`${BASE_URL}/dashboard`);
         }
+      } else {
+        stats = await request<DashboardStats>(`${BASE_URL}/dashboard`);
+      }
+      setCache("dashboard", stats);
+      return stats;
+    } catch (err: any) {
+      console.warn("Fetch getDashboardStats failed, calculating on offline data:", err.message);
+      try {
+        const pems = await api.getPemeriksaan();
+        const calculated = calculateDashboardStats(pems);
+        setCache("dashboard", calculated);
+        return calculated;
+      } catch (calcErr) {
+        return getCache<DashboardStats>("dashboard") || {
+          totalPemeriksaan: 0,
+          totalTaat: 0,
+          totalTidakTaat: 0,
+          rataRataNilai: 0,
+          nilaiTertinggi: 0,
+          nilaiTerendah: 0,
+          chartPemeriksaanBulanan: [],
+          chartKetaatan: [],
+          chartNilaiSatwas: [],
+          chartTrendTahunan: [],
+          paguAnggaran: 0,
+          realisasiAnggaran: 0,
+          sisaAnggaran: 0,
+          persentasePenyerapan: 0,
+          targetRealisasi: 0,
+          persentasePenyerapanTarget: 0,
+          targetQ1: 0,
+          targetQ2: 0,
+          targetQ3: 0,
+          targetQ4: 0,
+          realisasiQ1: 0,
+          realisasiQ2: 0,
+          realisasiQ3: 0,
+          realisasiQ4: 0
+        };
       }
     }
-    return request<DashboardStats>(`${BASE_URL}/dashboard`);
   },
 
   // Activity Logs
   getLogs: async (): Promise<ActivityLog[]> => {
-    return request<ActivityLog[]>(`${BASE_URL}/logs`);
+    try {
+      const logs = await request<ActivityLog[]>(`${BASE_URL}/logs`);
+      setCache("logs", logs);
+      return logs;
+    } catch (err) {
+      return getCache<ActivityLog[]>("logs") || [];
+    }
   },
 
   createLog: async (log: Omit<ActivityLog, "id" | "timestamp">) => {
-    return request<ActivityLog>(`${BASE_URL}/logs`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(log),
-    });
+    try {
+      return await request<ActivityLog>(`${BASE_URL}/logs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(log),
+      });
+    } catch (err) {
+      // Just return a dummy log for UI consistency
+      return {
+        id: `log_${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        ...log
+      } as ActivityLog;
+    }
   },
 
   // Keep Notes Local DB CRUD
   getNotes: async (): Promise<any[]> => {
-    return request<any[]>(`${BASE_URL}/notes`);
+    try {
+      const data = await request<any[]>(`${BASE_URL}/notes`);
+      setCache("notes", data);
+      return applyOfflineQueue("notes", data);
+    } catch (err: any) {
+      console.warn("Fetch getNotes failed, loading offline fallback:", err.message);
+      const cached = getCache<any[]>("notes") || [];
+      return applyOfflineQueue("notes", cached);
+    }
   },
 
   createNote: async (note: { title: string; content: string; color?: string; pinned?: boolean }) => {
-    return request<any>(`${BASE_URL}/notes`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(note),
-    });
+    const id = `n_${Date.now()}`;
+    const payload = { id, ...note };
+
+    if (!navigator.onLine) {
+      addToQueue("create", "notes", id, payload);
+      const cached = getCache<any[]>("notes") || [];
+      setCache("notes", [...cached, payload]);
+      return payload;
+    }
+
+    try {
+      return await request<any>(`${BASE_URL}/notes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(note),
+      });
+    } catch (err) {
+      addToQueue("create", "notes", id, payload);
+      const cached = getCache<any[]>("notes") || [];
+      setCache("notes", [...cached, payload]);
+      return payload;
+    }
   },
 
   updateNote: async (id: string, note: { title?: string; content?: string; color?: string; pinned?: boolean }) => {
-    return request<any>(`${BASE_URL}/notes/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(note),
-    });
+    if (!navigator.onLine) {
+      addToQueue("update", "notes", id, note);
+      const cached = getCache<any[]>("notes") || [];
+      const updated = cached.map(item => item.id === id ? { ...item, ...note } : item);
+      setCache("notes", updated);
+      return { id, ...note };
+    }
+
+    try {
+      return await request<any>(`${BASE_URL}/notes/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(note),
+      });
+    } catch (err) {
+      addToQueue("update", "notes", id, note);
+      const cached = getCache<any[]>("notes") || [];
+      const updated = cached.map(item => item.id === id ? { ...item, ...note } : item);
+      setCache("notes", updated);
+      return { id, ...note };
+    }
   },
 
   deleteNote: async (id: string) => {
-    return request<any>(`${BASE_URL}/notes/${id}`, {
-      method: "DELETE",
-    });
+    if (!navigator.onLine) {
+      addToQueue("delete", "notes", id, null);
+      const cached = getCache<any[]>("notes") || [];
+      const filtered = cached.filter(item => item.id !== id);
+      setCache("notes", filtered);
+      return { success: true };
+    }
+
+    try {
+      return await request<any>(`${BASE_URL}/notes/${id}`, {
+        method: "DELETE",
+      });
+    } catch (err) {
+      addToQueue("delete", "notes", id, null);
+      const cached = getCache<any[]>("notes") || [];
+      const filtered = cached.filter(item => item.id !== id);
+      setCache("notes", filtered);
+      return { success: true };
+    }
   },
 
   // Local Calendar Schedules CRUD
   getCalendarEvents: async (): Promise<any[]> => {
-    return request<any[]>(`${BASE_URL}/calendar-events`);
+    try {
+      const data = await request<any[]>(`${BASE_URL}/calendar-events`);
+      setCache("calendar", data);
+      return data;
+    } catch (err) {
+      return getCache<any[]>("calendar") || [];
+    }
   },
 
   createCalendarEvent: async (event: { 
@@ -581,22 +1017,43 @@ export const api = {
     googleEventId?: string; 
     pelakuUsahaId?: string; 
   }) => {
-    return request<any>(`${BASE_URL}/calendar-events`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(event),
-    });
+    try {
+      return await request<any>(`${BASE_URL}/calendar-events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(event),
+      });
+    } catch (err) {
+      const id = `ev_${Date.now()}`;
+      const payload = { id, ...event };
+      const cached = getCache<any[]>("calendar") || [];
+      setCache("calendar", [...cached, payload]);
+      return payload;
+    }
   },
 
   deleteCalendarEvent: async (id: string) => {
-    return request<any>(`${BASE_URL}/calendar-events/${id}`, {
-      method: "DELETE",
-    });
+    try {
+      return await request<any>(`${BASE_URL}/calendar-events/${id}`, {
+        method: "DELETE",
+      });
+    } catch (err) {
+      const cached = getCache<any[]>("calendar") || [];
+      const filtered = cached.filter(item => item.id !== id);
+      setCache("calendar", filtered);
+      return { success: true };
+    }
   },
 
   // Google Forms Register CRUD
   getGoogleForms: async (): Promise<any[]> => {
-    return request<any[]>(`${BASE_URL}/google-forms`);
+    try {
+      const data = await request<any[]>(`${BASE_URL}/google-forms`);
+      setCache("google-forms", data);
+      return data;
+    } catch (err) {
+      return getCache<any[]>("google-forms") || [];
+    }
   },
 
   createGoogleForm: async (form: { 
@@ -606,17 +1063,32 @@ export const api = {
     responderUri?: string; 
     editUri?: string; 
   }) => {
-    return request<any>(`${BASE_URL}/google-forms`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
-    });
+    try {
+      return await request<any>(`${BASE_URL}/google-forms`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+    } catch (err) {
+      const id = `form_${Date.now()}`;
+      const payload = { id, ...form };
+      const cached = getCache<any[]>("google-forms") || [];
+      setCache("google-forms", [...cached, payload]);
+      return payload;
+    }
   },
 
   deleteGoogleForm: async (id: string) => {
-    return request<any>(`${BASE_URL}/google-forms/${id}`, {
-      method: "DELETE",
-    });
+    try {
+      return await request<any>(`${BASE_URL}/google-forms/${id}`, {
+        method: "DELETE",
+      });
+    } catch (err) {
+      const cached = getCache<any[]>("google-forms") || [];
+      const filtered = cached.filter(item => item.id !== id);
+      setCache("google-forms", filtered);
+      return { success: true };
+    }
   },
 
   // AI Gemini & Text-to-Speech Assistant
@@ -635,4 +1107,180 @@ export const api = {
       body: JSON.stringify({ text, voiceName }),
     }).then(data => data.audio);
   },
+
+  // Offline Sync Layer Actions
+  getOfflineQueue,
+  clearOfflineQueue: () => saveOfflineQueue([]),
+  syncOfflineQueue: async (): Promise<{ successCount: number; failedCount: number }> => {
+    const queue = getOfflineQueue();
+    if (queue.length === 0) return { successCount: 0, failedCount: 0 };
+
+    let successCount = 0;
+    let failedCount = 0;
+    const remainingQueue: QueueItem[] = [];
+
+    for (const item of queue) {
+      try {
+        if (item.entity === "pemeriksaan") {
+          if (item.action === "create") {
+            if (isDirectSheetMode()) {
+              const token = await getAccessToken();
+              if (token) await googleSheetsApi.appendRow(token, cachedConfig!.SPREADSHEET_ID, "Pemeriksaan", item.payload);
+            } else {
+              await request(`${BASE_URL}/pemeriksaan`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(item.payload),
+              });
+            }
+          } else if (item.action === "update") {
+            if (isDirectSheetMode()) {
+              const token = await getAccessToken();
+              if (token) await googleSheetsApi.updateRow(token, cachedConfig!.SPREADSHEET_ID, "Pemeriksaan", item.entityId, item.payload);
+            } else {
+              await request(`${BASE_URL}/pemeriksaan/${item.entityId}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(item.payload),
+              });
+            }
+          } else if (item.action === "delete") {
+            if (isDirectSheetMode()) {
+              const token = await getAccessToken();
+              if (token) await googleSheetsApi.deleteRow(token, cachedConfig!.SPREADSHEET_ID, "Pemeriksaan", item.entityId);
+            } else {
+              await request(`${BASE_URL}/pemeriksaan/${item.entityId}`, {
+                method: "DELETE",
+              });
+            }
+          }
+        } else if (item.entity === "temuan") {
+          if (item.action === "create") {
+            if (isDirectSheetMode()) {
+              const token = await getAccessToken();
+              if (token) await googleSheetsApi.appendRow(token, cachedConfig!.SPREADSHEET_ID, "Temuan", item.payload);
+            } else {
+              await request(`${BASE_URL}/temuan`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(item.payload),
+              });
+            }
+          } else if (item.action === "update") {
+            if (isDirectSheetMode()) {
+              const token = await getAccessToken();
+              if (token) await googleSheetsApi.updateRow(token, cachedConfig!.SPREADSHEET_ID, "Temuan", item.entityId, item.payload);
+            } else {
+              await request(`${BASE_URL}/temuan/${item.entityId}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(item.payload),
+              });
+            }
+          } else if (item.action === "delete") {
+            if (isDirectSheetMode()) {
+              const token = await getAccessToken();
+              if (token) await googleSheetsApi.deleteRow(token, cachedConfig!.SPREADSHEET_ID, "Temuan", item.entityId);
+            } else {
+              await request(`${BASE_URL}/temuan/${item.entityId}`, {
+                method: "DELETE",
+              });
+            }
+          }
+        } else if (item.entity === "dokumen") {
+          if (item.action === "create") {
+            if (isDirectSheetMode()) {
+              const token = await getAccessToken();
+              if (token) await googleSheetsApi.appendRow(token, cachedConfig!.SPREADSHEET_ID, "Dokumen", item.payload);
+            } else {
+              await request(`${BASE_URL}/dokumen`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(item.payload),
+              });
+            }
+          } else if (item.action === "update") {
+            if (isDirectSheetMode()) {
+              const token = await getAccessToken();
+              if (token) await googleSheetsApi.updateRow(token, cachedConfig!.SPREADSHEET_ID, "Dokumen", item.entityId, item.payload);
+            } else {
+              await request(`${BASE_URL}/dokumen/${item.entityId}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(item.payload),
+              });
+            }
+          } else if (item.action === "delete") {
+            if (isDirectSheetMode()) {
+              const token = await getAccessToken();
+              if (token) await googleSheetsApi.deleteRow(token, cachedConfig!.SPREADSHEET_ID, "Dokumen", item.entityId);
+            } else {
+              await request(`${BASE_URL}/dokumen/${item.entityId}`, {
+                method: "DELETE",
+              });
+            }
+          }
+        } else if (item.entity === "notes") {
+          if (item.action === "create") {
+            await request(`${BASE_URL}/notes`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(item.payload),
+            });
+          } else if (item.action === "update") {
+            await request(`${BASE_URL}/notes/${item.entityId}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(item.payload),
+            });
+          } else if (item.action === "delete") {
+            await request(`${BASE_URL}/notes/${item.entityId}`, {
+              method: "DELETE",
+            });
+          }
+        } else if (item.entity === "users") {
+          if (item.action === "create") {
+            if (isDirectSheetMode()) {
+              const token = await getAccessToken();
+              if (token) await googleSheetsApi.appendRow(token, cachedConfig!.SPREADSHEET_ID, "Users", item.payload);
+            } else {
+              await request(`${BASE_URL}/users`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(item.payload),
+              });
+            }
+          } else if (item.action === "update") {
+            if (isDirectSheetMode()) {
+              const token = await getAccessToken();
+              if (token) await googleSheetsApi.updateRow(token, cachedConfig!.SPREADSHEET_ID, "Users", item.entityId, item.payload);
+            } else {
+              await request(`${BASE_URL}/users/${item.entityId}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(item.payload),
+              });
+            }
+          } else if (item.action === "delete") {
+            if (isDirectSheetMode()) {
+              const token = await getAccessToken();
+              if (token) await googleSheetsApi.deleteRow(token, cachedConfig!.SPREADSHEET_ID, "Users", item.entityId);
+            } else {
+              await request(`${BASE_URL}/users/${item.entityId}`, {
+                method: "DELETE",
+              });
+            }
+          }
+        }
+        successCount++;
+      } catch (err: any) {
+        console.error(`Failed to sync offline item:`, err);
+        remainingQueue.push(item);
+        failedCount++;
+      }
+    }
+
+    saveOfflineQueue(remainingQueue);
+    return { successCount, failedCount };
+  }
 };

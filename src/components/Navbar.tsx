@@ -1,5 +1,6 @@
 import React from "react";
-import { Database, CloudLightning, ShieldAlert, Anchor, RefreshCw } from "lucide-react";
+import { Database, CloudLightning, ShieldAlert, Anchor, RefreshCw, Wifi, WifiOff, Cloud, CloudOff } from "lucide-react";
+import { api } from "../lib/api";
 
 interface NavbarProps {
   activeTab: string;
@@ -18,6 +19,39 @@ export const Navbar: React.FC<NavbarProps> = ({
   isSyncing = false,
   lastSyncedTime = "" 
 }) => {
+  const [isOnline, setIsOnline] = React.useState(navigator.onLine);
+  const [queueLength, setQueueLength] = React.useState(0);
+
+  React.useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    const updateQueue = () => {
+      try {
+        const queue = api.getOfflineQueue();
+        setQueueLength(queue.length);
+      } catch (e) {
+        setQueueLength(0);
+      }
+    };
+
+    updateQueue();
+    window.addEventListener("offline_queue_changed", updateQueue);
+
+    // Monitor local storage changes also in case multiple tabs exist
+    window.addEventListener("storage", updateQueue);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("offline_queue_changed", updateQueue);
+      window.removeEventListener("storage", updateQueue);
+    };
+  }, []);
+
   const getHeaderTitle = () => {
     switch (activeTab) {
       case "dashboard":
@@ -77,7 +111,46 @@ export const Navbar: React.FC<NavbarProps> = ({
       </div>
 
       {/* Persistence Status Chip & Manual Sync */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
+        {/* Connection Status Pill */}
+        <div 
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border transition-colors select-none ${
+            isOnline 
+              ? "bg-emerald-50 text-emerald-800 border-emerald-200" 
+              : "bg-rose-50 text-rose-800 border-rose-200 animate-pulse"
+          }`}
+          title={isOnline ? "Aplikasi Terhubung ke Jaringan" : "Koneksi Terputus - Berjalan dalam Mode Offline"}
+          id="connection-status-pill"
+        >
+          {isOnline ? (
+            <Wifi className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
+          ) : (
+            <WifiOff className="w-3.5 h-3.5 text-rose-600" />
+          )}
+          <span className="font-semibold">{isOnline ? "Online" : "Offline"}</span>
+        </div>
+
+        {/* Offline Queue Pending Badge */}
+        {queueLength > 0 && (
+          <button
+            onClick={async () => {
+              if (!isOnline) {
+                alert("Anda sedang Offline. Sambungkan ke internet untuk menyinkronkan data.");
+                return;
+              }
+              if (onSyncClick) {
+                onSyncClick();
+              }
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-900 text-xs font-extrabold cursor-pointer hover:bg-amber-100 transition-all animate-bounce"
+            title={`${queueLength} perubahan disimpan di lokal dan siap disinkronkan. Klik untuk Sinkronisasi.`}
+            id="offline-queue-badge"
+          >
+            <Cloud className="w-3.5 h-3.5 text-amber-600 animate-pulse" />
+            <span>{queueLength} Tertunda</span>
+          </button>
+        )}
+
         {/* Auto Refresh Badge */}
         <div className="hidden xs:flex flex-col items-end text-right font-medium mr-1 select-none">
           <span className="text-[10px] text-emerald-600 font-extrabold flex items-center gap-1.5 uppercase tracking-wider">
@@ -104,6 +177,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             disabled={isSyncing}
             className={`flex items-center justify-center p-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 transition-all ${isSyncing ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
             title="Sinkronisasi Data Sekarang"
+            id="sync-button-header"
           >
             <RefreshCw className={`w-4 h-4 ${isSyncing ? "animate-spin text-sky-500" : ""}`} />
           </button>
@@ -114,6 +188,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             onClick={onSettingClick}
             className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold cursor-pointer hover:bg-emerald-100 transition-colors"
             title="Sinkronisasi Google Sheets Aktif"
+            id="persistence-sheet-mode-badge"
           >
             <CloudLightning className="w-3.5 h-3.5 text-emerald-500 animate-bounce" />
             <span className="font-mono">Google Sheet Sync</span>
@@ -123,6 +198,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             onClick={onSettingClick}
             className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-orange-50 border border-orange-200 text-orange-850 text-xs font-semibold cursor-pointer hover:bg-orange-100 transition-colors"
             title="Klik untuk menghubungkan ke Google Sheet Anda"
+            id="persistence-local-mode-badge"
           >
             <Database className="w-3.5 h-3.5 text-orange-500" />
             <span className="font-mono">Local Persistence Mode</span>

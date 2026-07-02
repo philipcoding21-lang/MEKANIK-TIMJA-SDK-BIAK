@@ -32,7 +32,7 @@ import { useToast } from "./components/Toast";
 import { initAuth, googleSignIn, googleLogout } from "./lib/firebaseAuth";
 
 // Lucide icon helper for login
-import { Anchor, Lock, User as UserIcon, LogIn, ExternalLink, RefreshCw, Chrome, ClipboardCheck, Wallet, AlertTriangle, Download, Pin, Plus, Trash2, Edit3, Check, X, StickyNote, Volume2, Sparkles, Play, Square, Loader2 } from "lucide-react";
+import { Anchor, Lock, User as UserIcon, LogIn, ExternalLink, RefreshCw, Chrome, ClipboardCheck, Wallet, AlertTriangle, Download, Pin, Plus, Trash2, Edit3, Check, X, StickyNote, Volume2, Sparkles, Play, Square, Loader2, WifiOff, Cloud } from "lucide-react";
 
 export default function App() {
   const { success, error, info, warning } = useToast();
@@ -301,6 +301,9 @@ export default function App() {
   }, [selectedDashboardSatwas, dashboardStats, pemeriksaan, config]);
 
   // Form toggles & edit parameters
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [queueLength, setQueueLength] = useState(0);
+
   const [showPemeriksaanForm, setShowPemeriksaanForm] = useState(false);
   const [editingPemeriksaan, setEditingPemeriksaan] = useState<Pemeriksaan | null>(null);
 
@@ -352,6 +355,50 @@ export default function App() {
       };
     }
   }, [currentUser]);
+
+  // Listen to network status for automated syncing and UI updates
+  useEffect(() => {
+    const handleOnline = async () => {
+      setIsOnline(true);
+      success("Koneksi internet pulih! Menyinkronkan perubahan offline...");
+      try {
+        const result = await api.syncOfflineQueue();
+        if (result.successCount > 0) {
+          success(`Berhasil menyinkronkan ${result.successCount} data ke server!`);
+        }
+        if (result.failedCount > 0) {
+          error(`Gagal menyinkronkan ${result.failedCount} data offline.`);
+        }
+      } catch (err) {
+        console.error("Auto sync failed:", err);
+      }
+      syncAllData(true);
+    };
+
+    const handleOffline = () => {
+      setIsOnline(false);
+      warning("Koneksi internet terputus! Bekerja dalam Mode Offline.");
+    };
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    const updateQueueSize = () => {
+      try {
+        setQueueLength(api.getOfflineQueue().length);
+      } catch (e) {
+        setQueueLength(0);
+      }
+    };
+    updateQueueSize();
+    window.addEventListener("offline_queue_changed", updateQueueSize);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("offline_queue_changed", updateQueueSize);
+    };
+  }, []);
 
   const fetchConfig = async () => {
     try {
@@ -406,6 +453,18 @@ export default function App() {
   const syncAllData = async (showNotification = false, isBackground = false) => {
     if (!isBackground) setLoading(true);
     try {
+      // Sync offline queue first if online
+      if (navigator.onLine) {
+        try {
+          const queueResult = await api.syncOfflineQueue();
+          if (showNotification && queueResult.successCount > 0) {
+            success(`Telah menyinkronkan ${queueResult.successCount} data offline sebelum memuat ulang database.`);
+          }
+        } catch (queueErr) {
+          console.error("Failed to sync offline queue during syncAllData:", queueErr);
+        }
+      }
+
       // Run API parallel loads
       const [pem, docs, tem, sat, usrs, stats, nts, cfg] = await Promise.all([
         api.getPemeriksaan(),
@@ -1228,6 +1287,55 @@ export default function App() {
           {activeTab === "dashboard" && filteredDashboardStats && (
             <div className="space-y-6">
               
+              {/* Connection Status Alerts for Dashboard */}
+              {!isOnline ? (
+                <div 
+                  className="bg-rose-50 border border-rose-200 text-rose-900 rounded-3xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-pulse"
+                  id="dashboard-offline-banner"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="p-3 bg-rose-100 text-rose-700 rounded-2xl">
+                      <WifiOff className="w-5 h-5 text-rose-600" />
+                    </div>
+                    <div>
+                      <h4 className="font-extrabold text-xs text-rose-950">Aplikasi Berjalan dalam Mode Offline</h4>
+                      <p className="text-[11px] text-rose-700/90 font-medium">
+                        Koneksi internet Anda terputus. Anda masih dapat melihat, menambah, atau merubah data secara offline. Semua perubahan disimpan sementara di database lokal perangkat Anda (localStorage) dan akan disinkronkan secara otomatis saat terhubung kembali.
+                      </p>
+                    </div>
+                  </div>
+                  {queueLength > 0 && (
+                    <span className="shrink-0 bg-rose-200/60 border border-rose-300 text-rose-950 text-[10px] font-black px-3 py-1.5 rounded-full uppercase tracking-wider">
+                      {queueLength} Antrean Tertunda
+                    </span>
+                  )}
+                </div>
+              ) : queueLength > 0 ? (
+                <div 
+                  className="bg-amber-50 border border-amber-200 text-amber-900 rounded-3xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm"
+                  id="dashboard-pending-sync-banner"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="p-3 bg-amber-100 text-amber-700 rounded-2xl">
+                      <Cloud className="w-5 h-5 text-amber-600 animate-bounce" />
+                    </div>
+                    <div>
+                      <h4 className="font-extrabold text-xs text-amber-950">Sinkronisasi Data Offline Tertunda ({queueLength} Data)</h4>
+                      <p className="text-[11px] text-amber-750 font-medium">
+                        Koneksi internet Anda aktif kembali, namun terdapat beberapa perubahan lokal yang belum terunggah ke database utama atau Google Spreadsheet.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => syncAllData(true)}
+                    className="shrink-0 flex items-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-650 active:bg-amber-700 text-white font-extrabold text-xs rounded-2xl shadow-sm transition-all cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-100" />
+                    Sync Sekarang
+                  </button>
+                </div>
+              ) : null}
+
               {/* Filter Satwas Wilayah */}
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white border border-slate-200 p-5 rounded-3xl shadow-xs">
                 <div className="space-y-1">
@@ -1367,6 +1475,7 @@ export default function App() {
                     <div className="space-y-1">
                       <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Isi Arahan / Instruksi</label>
                       <textarea
+                        id="newNoteContent"
                         rows={3}
                         placeholder="Masukkan instruksi detil harian di sini..."
                         value={newNoteContent}
@@ -1858,6 +1967,15 @@ export default function App() {
             <ActivityLogList />
           )}
 
+          {/* TAB 9: AI VOICE ASSISTANT */}
+          {activeTab === "ai-assistant" && currentUser && (
+            <AIVoiceAssistant
+              user={currentUser}
+              activeTab={activeTab}
+              dashboardStats={dashboardStats || undefined}
+            />
+          )}
+
         </main>
       </div>
 
@@ -1890,7 +2008,15 @@ export default function App() {
         />
       )}
 
-
+      {/* FLOATING AI ASSISTANT OVERLAY */}
+      {currentUser && activeTab !== "ai-assistant" && (
+        <AIVoiceAssistant
+          user={currentUser}
+          activeTab={activeTab}
+          dashboardStats={dashboardStats || undefined}
+          isFloatingOnly={true}
+        />
+      )}
 
     </div>
   );

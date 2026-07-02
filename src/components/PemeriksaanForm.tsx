@@ -376,6 +376,7 @@ export const PemeriksaanForm: React.FC<PemeriksaanFormProps> = ({
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Uraian Temuan BA / Kendala Kegiatan</label>
                 <input
+                  id="pemeriksaanTemuan"
                   type="text"
                   value={temuan}
                   onChange={(e) => setTemuan(e.target.value)}
@@ -387,6 +388,7 @@ export const PemeriksaanForm: React.FC<PemeriksaanFormProps> = ({
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Hasil Pengawasan / Tindakan Rekomendasi</label>
                 <input
+                  id="pemeriksaanRekomendasi"
                   type="text"
                   value={rekomendasi}
                   onChange={(e) => setRekomendasi(e.target.value)}
